@@ -1,0 +1,134 @@
+<kontext>
+Du arbetar i kodbasen för en studie-/anteckningsapp som har två huvuddelar:
+(a) canvas-vyn där användaren skriver anteckningar (döps om enligt nedan),
+(b) en AI-assistant-panel/chatt kopplad till anteckningarna.
+
+Målet med denna arbetsomgång är att höja den upplevda kvaliteten och
+konsistensen i appens AI-drivna anteckningsupplevelse: AI-actions ska kännas
+paketerade och lättillgängliga (jämförbart med hur Claude Skills paketerar
+återkommande AI-funktioner), UI-buggar med överflödande text/felplacerade
+funktioner ska rättas, canvas ska kännas mindre visuellt rörig och stödja
+riktiga mindmap-kopplingar, och användaren ska få mer kontroll över tema,
+panelbredd och sessionshistorik.
+</kontext>
+
+<uppdrag>
+
+### A. AI Assistant-panelen
+1. Flytta funktionen "Quiz me from your notes" så att den ligger INUTI
+   AI Assistant-panelen. Ta bort/dölj den från sin nuvarande placering utanför
+   panelen — funktionen ska bara finnas på ett ställe.
+2. Fixa bugg: rubriktexten på AI Assistant-panelen går utanför skärmen
+   (overflow/clipping). Korrekt, fullständig etikett ska vara exakt
+   "Ai assistant" och den ska rymmas inom panelens synliga yta på alla
+   skärmstorlekar panelen stödjer.
+3. Lägg till möjlighet att se tidigare konversationer ("previous chats") inuti
+   AI Assistant-panelen, t.ex. som en historik-lista användaren kan öppna och
+   återgå till.
+4. Gör AI Assistant-panelens bredd justerbar av användaren (t.ex. drag-handtag
+   och/eller en inställning för bredd), inom rimliga min/max-gränser så att
+   layouten inte går sönder.
+5. Ta fram en ny logga för AI Assistant som liknar referensbilden "picture2"
+   (finns i projektets bildmapp — lokalisera filen i kodbasen/assets, exakt
+   sökväg är inte specificerad av användaren). Bearbetning:
+   - Ta bort bakgrunden helt och gör den ren vit.
+   - Förenkla designen på robothanden, specifikt linjearbetet/nätet
+     (t.ex. färre/renare linjer, mer minimalistiskt uttryck).
+   - Behåll alla detaljer på fingrarna oförändrade.
+
+### B. Text-interaktion: markera vs dubbelklicka
+6. När användaren MARKERAR text ska en flytande meny visas med actions:
+   Explain, Summarize, Translate, Ask, samt formateringsval Text Color och
+   Smaller Text (och motsvarande övriga textstorlekar där det är rimligt).
+7. När användaren DUBBELKLICKAR på text ska en separat meny visas med
+   formateringsval: Text Color, Smaller Text, och liknande textformatering.
+   [Antagande: dubbelklicksmenyn innehåller ENDAST formateringsval, inte
+   AI-actions (explain/summarize/etc.) — om detta är fel, korrigera till att
+   inkludera samma AI-actions som markeringsmenyn.]
+8. Båda menyerna ska positioneras så de inte blockerar den markerade/valda
+   texten och inte krockar med annan befintlig textredigeringsfunktionalitet.
+
+### C. "Läs anteckning som kontext"-skill
+9. Bygg om funktionen "Let the AI read this note as context" till att
+   presenteras som en paketerad skill/modul, i stil med hur Claude Skills
+   listar bundlade förmågor. Skillen ska samla:
+   - Explain, Summarize, Translate, Ask
+   - Text Color och Smaller Text (tillgängliga när man frågar om sina
+     anteckningar via denna skill)
+   - Quiz me (samma funktion som flyttades i punkt A.1)
+
+### D. Tema
+10. Lägg till "Light/Dark theme" i Settings. Utöver ett enkelt ljus/mörk-val
+    ska användaren kunna välja GRADEN av ljushet/mörker via ett reglage
+    (skala från helt mörkt till helt ljust), inte bara av/på.
+
+### E. Sessioner och export
+11. Alla sessioner/konversationer ska sparas persistent i appen (överlever
+    omstart av appen).
+12. Lägg till "Export as study files" i Settings, som exporterar sparat
+    material till fil. [Antagande: exakt filformat är inte specificerat av
+    användaren — välj ett rimligt standardformat (t.ex. Markdown eller PDF)
+    om inget annat framgår av befintlig kodbas, och flagga valet i din
+    sammanfattning.]
+
+### F. Branding: Study Canvas → Studyboard v1
+13. Byt namn konsekvent genom hela appen (UI-text, ev. interna referenser där
+    det syns för användaren) från "Study Canvas" till "Studyboard v1".
+14. Använd referensbilden "picture1" (finns i projektets bildmapp — lokalisera
+    filen i kodbasen/assets) som ny logo för Studyboard v1.
+
+### G. Taskbar-beteende för Studyboard v1
+15. Höger-klick på Studyboard v1-taskbaren ska visa ett alternativ "Hide" som
+    döljer taskbaren.
+16. När taskbaren är dold: om användaren för musen till toppen av skärmen ska
+    taskbaren automatiskt visas igen (temporärt, som auto-reveal).
+17. Höger-klick på taskbaren igen (efter att den visats via hover) ska ge
+    möjlighet att stänga av/ta bort hide-beteendet, så att taskbaren blir
+    permanent synlig igen.
+
+### H. Textfärg (global funktion)
+18. Säkerställ att det finns en fungerande funktion för att ändra färgen på
+    text i appen. [Antagande: detta kan vara samma funktion som Text Color i
+    B.6/B.7 — om syftet är en separat global textfärgsinställning (t.ex. i
+    Settings, oberoende av markering/dubbelklick), förtydliga och implementera
+    som en distinkt inställning.]
+
+### I. Mindmap-kopplingar (nytt)
+19. Gör det möjligt att koppla samman noder på canvasen — text-till-text och
+    text-till-bild — med en synlig kopplingslinje, så att canvasen fungerar
+    som en riktig mindmap (inte bara fristående textblock/bilder).
+    - Kopplingslinjerna ska alltid ha fast vit färg (ingen färgväljare för
+      dessa linjer, till skillnad från textfärgs-funktionerna i B/H).
+    - Användaren ska kunna skapa kopplingen genom att dra en linje mellan två
+      noder (exakt trigger, t.ex. drag-handtag på nodkant, avgörs av
+      utvecklaren om inget annat framgår av befintlig canvas-interaktion).
+
+### J. Canvas-bakgrund (nytt)
+20. Minska storleken på bakgrundsprickarna (dot-grid) på canvasen — de
+    upplevs som för visuellt påträngande i nuvarande storlek. Gör endast
+    prickarnas storlek mindre; ändra inte antal/avstånd mellan dem om inte
+    det krävs för att uppnå en mindre påträngande bakgrund.
+
+</uppdrag>
+
+<restriktioner>
+- Ändra inte annan logik/funktionalitet i berörda filer utan att flagga det
+  separat i din sammanfattning.
+- Bildfilerna "picture1" och "picture2" är inte exakt sökvägsangivna av
+  användaren — hitta dem i projektets bildmapp/assets innan du använder dem;
+  gissa inte fram innehåll du inte kan se.
+- Byt namn konsekvent (Study Canvas → Studyboard v1) — lämna inga kvarvarande
+  förekomster av det gamla namnet i användarsynlig text.
+- Bevara exakt fingerdetaljer vid bearbetning av AI Assistant-loggan (punkt A.5).
+- Mindmap-kopplingslinjernas vita färg (I.19) är fast och ska INTE göras
+  konfigurerbar, även om andra textfärgs-funktioner i prompten är valbara.
+</restriktioner>
+
+<output>
+Implementera ändringarna i kodbasen. Redovisa sedan per sektion (A–J):
+- Vad som ändrades (kort, en till tre rader per punkt).
+- Eventuella antaganden du gjorde där användarens instruktion var öppen
+  (särskilt B.7, E.12, H.18 och I.19:s drag-trigger ovan).
+- Bekräftelse på att du verifierat ändringen visuellt/funktionellt i appen
+  (inte bara att koden kompilerar).
+</output>

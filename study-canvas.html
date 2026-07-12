@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Study Canvas</title>
+<title>Studyboard v1</title>
 <style>
 /* ============================================================
    Design system
@@ -106,7 +106,24 @@ svg{display:block;flex:none}
   background:var(--surface);
   border-bottom:1px solid var(--border);
   z-index:50;position:relative;
+  transition:margin-top .2s ease;
 }
+body.tb-hidden #topbar{margin-top:calc(0px - var(--topbar-h))}
+body.tb-hidden.tb-reveal #topbar{margin-top:0;box-shadow:var(--shadow-2)}
+#tbMenu,#textMenu{
+  position:fixed;z-index:400;display:none;min-width:230px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-md);box-shadow:var(--shadow-2);padding:5px;
+}
+#textMenu{min-width:186px}
+#tbMenu.show,#textMenu.show{display:block}
+#tbMenu button,#textMenu button{
+  display:flex;width:100%;align-items:center;gap:8px;height:32px;padding:0 10px;
+  border-radius:var(--r-sm);color:var(--text);font-size:13px;text-align:left;
+}
+#tbMenu button:hover,#textMenu button:hover{background:var(--surface-2)}
+#textMenu button .tm-dim{margin-left:auto;color:var(--text-faint);font-size:11px;font-family:var(--mono)}
+#textMenu .tm-sep{height:1px;background:var(--border);margin:5px 4px}
 .brand{display:flex;align-items:center;gap:8px;padding:0 6px 0 2px;font-weight:600;font-size:15px;letter-spacing:.1px;user-select:none}
 .brand .logo{
   width:28px;height:28px;border-radius:8px;
@@ -137,11 +154,6 @@ svg{display:block;flex:none}
 }
 #docTitle:hover{background:var(--surface-2)}
 #docTitle:focus{outline:none;border-color:var(--accent);background:var(--surface)}
-#dirtyDot{
-  width:8px;height:8px;border-radius:50%;background:var(--warn);
-  flex:none;margin-left:-2px;opacity:0;transition:opacity .15s;
-}
-#dirtyDot.on{opacity:1}
 .tb-spacer{flex:1}
 
 /* tooltips */
@@ -156,6 +168,9 @@ svg{display:block;flex:none}
   z-index:200;box-shadow:var(--shadow-2);
 }
 [data-tip]:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
+/* right-anchored tooltip for buttons near the right screen edge, so the label never spills off-screen */
+[data-tip].tip-r::after{left:auto;right:0;transform:translateX(0) scale(.96)}
+[data-tip].tip-r:hover::after{transform:translateX(0) scale(1)}
 
 /* ============================================================
    Main layout
@@ -168,14 +183,19 @@ svg{display:block;flex:none}
 #canvasWrap{
   flex:1;position:relative;overflow:hidden;
   background-color:var(--bg);
-  background-image:radial-gradient(circle,var(--dot) 1.1px,transparent 1.1px);
+  background-image:radial-gradient(circle,var(--dot) 0.6px,transparent 0.6px);
   background-size:26px 26px;
   cursor:default;
   touch-action:none;
 }
 #canvasWrap.panning{cursor:grabbing !important}
 #canvasWrap.pan-ready{cursor:grab}
-#world{position:absolute;top:0;left:0;width:0;height:0;transform-origin:0 0;will-change:transform}
+/* NOTE: no persistent will-change here — a permanent transform layer gets rasterised
+   once at 100% and then GPU-scaled, which blurs the text at any other zoom. We promote
+   it to a layer only while actively panning/zooming (see bumpWillChange), then drop it
+   so the text repaints crisply at the current zoom. */
+#world{position:absolute;top:0;left:0;width:0;height:0;transform-origin:0 0}
+#world.interacting{will-change:transform}
 
 /* blocks */
 .block{
@@ -206,6 +226,15 @@ svg{display:block;flex:none}
   width:100%;height:100%;object-fit:fill;display:block;
   border-radius:inherit;pointer-events:none;user-select:none;
 }
+/* paper sheet = a Word-style page: ONE continuous text area with a fixed size.
+   overflow:hidden + a typing guard = the page's size limit. It is a normal text block
+   (class .paper added), so the full toolbar — colours included — works on it. */
+.block.text-block.paper{border:1px solid var(--border);border-radius:4px}
+.block.text-block.paper .content{overflow:hidden;padding:26px 30px}
+.block.text-block.paper .paper-count{
+  position:absolute;bottom:6px;right:10px;font-size:10px;font-weight:600;letter-spacing:.3px;
+  color:#b8bcc6;pointer-events:none;user-select:none;
+}
 
 /* resize handles */
 .handle{
@@ -221,6 +250,33 @@ svg{display:block;flex:none}
 .handle.h-nw{top:-6px;left:-6px;cursor:nwse-resize}
 .handle.h-se{bottom:-6px;right:-6px;cursor:nwse-resize}
 .handle.h-sw{bottom:-6px;left:-6px;cursor:nesw-resize}
+/* mindmap connectors: a dot on every side of the selected block. They live in an
+   overlay above the floating toolbar so no side is ever covered/un-grabbable. */
+#linkHandles{position:absolute;inset:0;z-index:42;pointer-events:none;display:none}
+#linkHandles.show{display:block}
+#linkHandles .lh{
+  position:absolute;width:12px;height:12px;border-radius:50%;margin:-6px 0 0 -6px;
+  background:var(--accent);border:2px solid var(--surface);box-shadow:var(--shadow-1);
+  cursor:crosshair;pointer-events:auto;transition:transform .1s;
+}
+#linkHandles .lh:hover{transform:scale(1.35)}
+
+/* PowerPoint-style smart alignment guides shown while dragging a block/picture */
+/* dashed guides in the Hermes-agent brand blue (--color-hermes #0000f2) */
+#alignGuides{position:absolute;inset:0;z-index:39;pointer-events:none;display:none}
+#alignGuides.show{display:block}
+#alignGuides .gv{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed #0000f2}
+#alignGuides .gh{position:absolute;left:0;right:0;height:0;border-top:1px dashed #0000f2}
+
+/* mindmap connection lines — always plain white, by design (not configurable) */
+#linkLayer{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
+#linkLayer line{
+  stroke:#ffffff;stroke-width:2.5;stroke-linecap:round;
+  pointer-events:stroke;cursor:pointer;
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.45));
+}
+#linkLayer line.sel{stroke-width:4.5;filter:drop-shadow(0 0 5px rgba(255,255,255,.9))}
+#linkLayer line.temp{stroke-dasharray:7 6;pointer-events:none}
 
 /* empty state */
 #emptyHint{
@@ -290,52 +346,129 @@ svg{display:block;flex:none}
   border:1px solid var(--border-strong);position:relative;
   background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);
 }
-.color-well input[type=color]{position:absolute;inset:-6px;width:40px;height:40px;opacity:0;cursor:pointer}
 #fontSizeVal{min-width:26px;text-align:center;font-size:12.5px;font-weight:600;color:var(--text-dim)}
 
+/* in-app "Basic colors" picker (replaces the native OS colour dialog) */
+#colorPop{
+  position:absolute;z-index:46;display:none;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-md);box-shadow:var(--shadow-2);
+  padding:11px;user-select:none;
+}
+#colorPop.show{display:block}
+#colorPop .cp-title{
+  font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
+  color:var(--text-faint);margin-bottom:9px;
+}
+#colorPop .cp-grid{
+  display:grid;grid-template-columns:repeat(6,1fr);gap:7px;
+}
+#colorPop .cp-swatch{
+  width:24px;height:24px;border-radius:7px;cursor:pointer;position:relative;
+  border:1px solid rgba(0,0,0,.16);transition:transform .1s;
+}
+#colorPop .cp-swatch:hover{transform:scale(1.15)}
+#colorPop .cp-swatch.picked::after{
+  content:'';position:absolute;inset:-4px;border:2px solid var(--sel);border-radius:10px;
+}
+/* "None" swatch (clears a default) — white with a red diagonal slash */
+#colorPop .cp-swatch.cp-none{
+  background:var(--surface);
+  background-image:linear-gradient(135deg,transparent 44%,#e5484d 44%,#e5484d 56%,transparent 56%);
+}
+
 /* ============================================================
-   Selection popover (AI actions on selected text)
+   Selection popover (AI actions + formatting on selected text)
+   and the double-click formatting popover
    ============================================================ */
-#selPop{
+#selPop,#fmtPop{
   position:absolute;z-index:45;display:none;align-items:center;gap:2px;
   background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r-md);box-shadow:var(--shadow-2);padding:4px;
+  white-space:nowrap;
 }
-#selPop.show{display:flex}
-#selPop button{
+#selPop.show,#fmtPop.show{display:flex}
+#selPop button,#fmtPop button{
   display:flex;align-items:center;gap:5px;height:28px;padding:0 9px;
   border-radius:var(--r-sm);color:var(--text-dim);font-size:12.5px;font-weight:500;
 }
-#selPop button:hover{background:var(--accent-soft);color:var(--accent)}
+#selPop button:hover,#fmtPop button:hover{background:var(--accent-soft);color:var(--accent)}
 #selPop .sp-spark{color:var(--accent)}
+.sp-sep{width:1px;height:18px;background:var(--border);margin:0 3px;flex:none}
 
 /* ============================================================
    AI Sidebar
    ============================================================ */
 #sidebar{
-  width:360px;flex:none;display:flex;flex-direction:column;min-width:0;
+  width:var(--sb-w,360px);flex:none;display:flex;flex-direction:column;min-width:0;
   background:var(--surface);border-left:1px solid var(--border);
-  transition:margin-right .22s ease;
+  transition:margin-right .22s ease;position:relative;
 }
-#sidebar.collapsed{margin-right:-360px}
+#sidebar.collapsed{margin-right:calc(0px - var(--sb-w,360px))}
+#sidebar.resizing{transition:none}
+#sbResize{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:ew-resize;z-index:12}
+#sbResize:hover,#sbResize.active{background:var(--sel-soft)}
 .sb-head{
-  height:48px;flex:none;display:flex;align-items:center;gap:8px;
-  padding:0 10px 0 14px;border-bottom:1px solid var(--border);
+  height:48px;flex:none;display:flex;align-items:center;gap:6px;
+  padding:0 10px 0 12px;border-bottom:1px solid var(--border);
 }
-.sb-head .sb-title{font-weight:600;font-size:14px;display:flex;align-items:center;gap:7px}
-.sb-head .sb-title svg{color:var(--accent)}
-.sb-head .grow{flex:1}
+/* the title must never overflow the panel, whatever width the user drags it to */
+.sb-head .sb-title{
+  font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;
+  flex:1;min-width:0;
+}
+.sb-head .sb-title .sb-title-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-ibtn{
-  width:30px;height:30px;border-radius:var(--r-sm);
+  width:30px;height:30px;border-radius:var(--r-sm);flex:none;
   display:flex;align-items:center;justify-content:center;color:var(--text-dim);
 }
 .sb-ibtn:hover{background:var(--surface-2);color:var(--text)}
 
-.ctx-row{
-  display:flex;align-items:center;gap:8px;padding:9px 14px;
-  border-bottom:1px solid var(--border);background:var(--surface-2);
-  font-size:12.5px;color:var(--text-dim);flex:none;
+/* ---- packaged skill (Claude Skills-style bundle) ---- */
+.skills{padding:10px 12px;border-bottom:1px solid var(--border);background:var(--surface-2);flex:none}
+.skill-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md)}
+.skill-head{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer;user-select:none}
+.skill-ic{
+  width:30px;height:30px;border-radius:8px;flex:none;background:var(--accent-soft);
+  display:flex;align-items:center;justify-content:center;color:var(--accent);
 }
+.skill-info{flex:1;min-width:0}
+.skill-name{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.skill-desc{font-size:11px;color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.skill-chev{color:var(--text-faint);transition:transform .15s;flex:none}
+.skill-card.open .skill-chev{transform:rotate(180deg)}
+.skill-body{display:none;border-top:1px solid var(--border);padding:9px 11px;flex-wrap:wrap;gap:6px}
+.skill-card.open .skill-body{display:flex}
+.skill-chip{
+  display:flex;align-items:center;gap:5px;height:27px;padding:0 10px;
+  border-radius:99px;border:1px solid var(--border);background:var(--surface-2);
+  font-size:12px;font-weight:500;color:var(--text-dim);
+}
+.skill-chip:hover{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+
+/* ---- previous chats panel ---- */
+#chatHistory{
+  position:absolute;top:48px;left:0;right:0;bottom:0;z-index:9;
+  background:var(--surface);display:none;flex-direction:column;gap:6px;
+  overflow-y:auto;padding:10px 12px;
+}
+#chatHistory.show{display:flex}
+.ch-label{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--text-faint);padding:2px 1px}
+.ch-item{
+  display:flex;align-items:center;gap:9px;padding:9px 11px;flex:none;
+  border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;background:var(--surface);
+}
+.ch-item:hover{background:var(--surface-2)}
+.ch-item.active{border-color:var(--accent);background:var(--accent-soft)}
+.ch-main{flex:1;min-width:0}
+.ch-title{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-sub{font-size:11px;color:var(--text-faint)}
+.ch-session{font-size:11px;color:var(--accent);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-del{
+  width:26px;height:26px;border-radius:7px;color:var(--text-faint);flex:none;
+  display:flex;align-items:center;justify-content:center;font-size:15px;
+}
+.ch-del:hover{background:var(--danger-soft);color:var(--danger)}
 .switch{position:relative;width:32px;height:18px;flex:none;cursor:pointer}
 .switch input{opacity:0;width:0;height:0;position:absolute}
 .switch .track{
@@ -386,6 +519,20 @@ svg{display:block;flex:none}
 #chatEmpty .s{font-size:12.5px;line-height:1.5;max-width:240px}
 
 .composer{flex:none;padding:12px 14px 14px;border-top:1px solid var(--border);background:var(--surface)}
+.focus-chip{
+  display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:5px 6px 5px 10px;
+  background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);
+  border-radius:10px;font-size:12px;font-weight:600;
+}
+.focus-chip[hidden]{display:none}
+.focus-chip svg{flex:none}
+.focus-chip #focusChipText{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.focus-chip #focusChipClear{
+  flex:none;display:flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border:none;border-radius:6px;padding:0;cursor:pointer;
+  background:transparent;color:var(--accent);
+}
+.focus-chip #focusChipClear:hover{background:var(--accent);color:var(--accent-text)}
 .composer-box{
   display:flex;align-items:flex-end;gap:6px;
   background:var(--surface-2);border:1px solid var(--border);
@@ -537,21 +684,175 @@ svg{display:block;flex:none}
 @keyframes toastIn{from{transform:translateY(12px);opacity:0}to{transform:none;opacity:1}}
 .toast.out{transition:opacity .25s,transform .25s;opacity:0;transform:translateY(8px)}
 
-#restoreBar{
-  position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:60;
-  display:none;align-items:center;gap:12px;
-  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
-  box-shadow:var(--shadow-2);padding:9px 10px 9px 15px;font-size:13px;
+/* ============================================================
+   Home / session library
+   ============================================================ */
+#homeView{
+  position:fixed;inset:0;z-index:80;display:none;
+  overflow-y:auto;background:var(--bg);
+  scroll-behavior:smooth;
 }
-#restoreBar.show{display:flex}
-#restoreBar b{font-weight:650}
-#restoreBar .btn{height:30px;padding:0 12px;font-size:12.5px}
+#homeView.show{display:block}
+.home-inner{max-width:520px;margin:0 auto;padding:40px 24px 90px}
+.home-top{display:flex;align-items:center;gap:8px;margin-bottom:26px}
+
+.home-search-wrap{
+  position:sticky;top:0;z-index:5;background:var(--bg);
+  padding:14px 0 20px;margin-bottom:14px;
+}
+.home-search{
+  display:flex;align-items:center;gap:10px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:999px;padding:0 18px;height:46px;width:100%;
+  box-shadow:var(--shadow-1);
+  color:var(--text-faint);
+  transition:border-color .15s,box-shadow .15s;
+}
+.home-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--sel-soft)}
+#homeSearch{flex:1;border:none;background:none;outline:none;font-size:14.5px;height:100%}
+#homeSearch::placeholder{color:var(--text-faint)}
+#searchCount{
+  font-family:var(--mono);font-size:11px;color:var(--text-faint);
+  border:1px solid var(--border);border-radius:6px;padding:2px 7px;
+  display:none;
+}
+#searchCount.show{display:block}
+
+/* live search dropdown, Google/YouTube style — appears beneath the search bar as you type */
+#searchSuggest{
+  position:absolute;left:0;right:0;top:64px;z-index:7;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;box-shadow:var(--shadow-3);
+  overflow:hidden;max-height:60vh;overflow-y:auto;display:none;
+}
+#searchSuggest.show{display:block}
+.suggest-item{
+  display:flex;align-items:center;gap:11px;
+  padding:12px 16px;cursor:pointer;
+}
+.suggest-item + .suggest-item{border-top:1px solid var(--border)}
+.suggest-item:hover,.suggest-item.active{background:var(--surface-2)}
+.suggest-item .si-ic{color:var(--text-faint);flex:none;display:flex}
+.suggest-item .si-title{
+  font-weight:600;font-size:14px;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.suggest-item .si-sub{font-size:11.5px;color:var(--text-faint);margin-left:auto;flex:none;white-space:nowrap}
+.suggest-empty{padding:14px 16px;color:var(--text-faint);font-size:13.5px}
+
+.lib-label{
+  font-size:12px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--text-faint);margin:8px 0 16px;display:none;
+}
+
+/* ---- vertical stack of big page-shaped cards: "New session" is first, each session is
+   the same size and takes that spot as you scroll down, like flipping through a stack of files ---- */
+#sessionGrid{
+  display:flex;flex-direction:column;
+  gap:26px;
+}
+.tile{
+  position:relative;width:100%;aspect-ratio:6/5;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-lg);overflow:hidden;
+  clip-path:polygon(0 0, calc(100% - 48px) 0, 100% 48px, 100% 100%, 0 100%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  cursor:pointer;box-shadow:var(--shadow-1);text-align:center;padding:20px;
+  outline:2px solid transparent;outline-offset:4px;
+  scroll-margin-top:96px;
+  transition:transform .22s cubic-bezier(.2,1.3,.4,1),box-shadow .22s,opacity .2s,outline-color .2s,border-color .15s;
+}
+.tile::before{
+  content:'';position:absolute;top:0;right:0;width:48px;height:48px;
+  background:var(--surface-3);clip-path:polygon(0 0,100% 100%,0 100%);
+}
+.tile:hover{transform:translateY(-4px);box-shadow:var(--shadow-3)}
+.tile:active{transform:translateY(-1px)}
+.tile.dim{opacity:.25}
+.tile.found{outline-color:var(--accent);animation:foundPulse 1.2s ease 2}
+@keyframes foundPulse{
+  0%,100%{outline-color:var(--accent)}
+  50%{outline-color:transparent}
+}
+
+.tile.new-tile{border:1.5px dashed var(--border-strong)}
+.tile.new-tile:hover{border-color:var(--accent)}
+.t-plus{
+  width:68px;height:68px;border-radius:22px;flex:none;
+  background:linear-gradient(135deg,var(--accent),#9a5bd6);
+  color:#fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:var(--shadow-1);
+}
+.t-doc{
+  width:56px;height:68px;flex:none;border-radius:6px 12px 6px 6px;
+  background:linear-gradient(160deg,var(--surface-2),var(--surface-3));
+  border:1px solid var(--border);position:relative;
+  display:flex;align-items:center;justify-content:center;color:var(--text-faint);
+}
+
+.fc-title{font-weight:700;font-size:19px;color:var(--text)}
+.fc-sub{font-size:12.5px;color:var(--text-faint)}
+input.tile-input{
+  width:80%;text-align:center;font-size:19px;font-weight:700;
+  border:none;outline:1px solid var(--accent);border-radius:8px;
+  background:var(--surface-2);padding:6px 10px;color:var(--text);
+}
+.fc-del{
+  position:absolute;top:12px;left:12px;z-index:4;
+  width:30px;height:30px;border-radius:9px;
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text-dim);display:flex;align-items:center;justify-content:center;
+  opacity:0;transition:opacity .15s,background .12s,color .12s;
+  box-shadow:var(--shadow-1);
+}
+.tile:hover .fc-del{opacity:1}
+.fc-del:hover{background:var(--danger-soft);color:var(--danger);border-color:var(--danger)}
+#libEmpty{
+  width:100%;text-align:center;color:var(--text-dim);padding:44px 0;line-height:1.6;
+}
+#libEmpty .le-icon{font-size:38px;margin-bottom:8px}
+
+#saveState{
+  font-size:11.5px;color:var(--text-faint);white-space:nowrap;
+  min-width:58px;user-select:none;
+}
+#saveState.saving{color:var(--warn)}
 
 /* drag-over highlight */
 #canvasWrap.dropping::after{
   content:'';position:absolute;inset:6px;border:2.5px dashed var(--accent);
   border-radius:var(--r-lg);pointer-events:none;background:var(--sel-soft);
 }
+
+/* numeric font-size fields (type the size directly) in all text toolbars */
+#fontSizeInput,#spFontVal,#fpFontVal,#defFont{
+  width:40px;height:27px;text-align:center;font-size:12.5px;font-weight:600;
+  color:var(--text);background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--r-sm);outline:none;-moz-appearance:textfield;appearance:textfield;
+}
+#fontSizeInput:focus,#spFontVal:focus,#fpFontVal:focus,#defFont:focus{border-color:var(--accent)}
+#fontSizeInput::-webkit-inner-spin-button,#spFontVal::-webkit-inner-spin-button,#fpFontVal::-webkit-inner-spin-button,#defFont::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+/* topbar default-style bar: size · colour · B/I/U · highlight */
+.tb-fmtbar{display:flex;align-items:center;gap:5px;flex:none}
+.tb-fontgroup{display:flex;align-items:center;gap:4px;position:relative;flex:none}
+.tb-mini{
+  height:27px;min-width:26px;padding:0 4px;border-radius:var(--r-sm);
+  font-size:12.5px;font-weight:700;color:var(--text-dim);background:var(--surface-2);
+  border:1px solid var(--border);transition:background .12s,color .12s;
+}
+.tb-mini:hover{background:var(--surface-3);color:var(--text)}
+.tb-mini:active{background:var(--border)}
+.tb-fmt{
+  position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  width:29px;height:27px;border-radius:var(--r-sm);font-size:13px;line-height:1;
+  color:var(--text-dim);background:transparent;border:1px solid transparent;
+  transition:background .12s,color .12s,border-color .12s;
+}
+.tb-fmt:hover{background:var(--surface-2);color:var(--text)}
+.tb-fmt.active-toggle{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.tb-fmt .fmt-a{font-weight:700}
+.tb-fmt .fmt-bar{width:15px;height:3px;border-radius:2px;margin-top:2px;background:var(--text-dim)}
+.tb-fmt .fmt-h{font-weight:700;padding:0 2px;border-radius:2px}
 </style>
 </head>
 <body>
@@ -560,31 +861,26 @@ svg{display:block;flex:none}
 <header id="topbar">
   <div class="brand">
     <div class="logo">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="M5 10.5V16c0 1.5 3.1 3 7 3s7-1.5 7-3v-5.5"/></svg>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.2 3.2 8h17.6L12 2.2z"/><circle cx="12" cy="5.9" r="1.1" fill="#000" opacity=".25"/><rect x="4.6" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="8.9" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="13.2" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="17.5" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="3.8" y="17.5" width="16.4" height="1.9" rx=".95"/><rect x="2.6" y="20.2" width="18.8" height="2" rx="1"/></svg>
     </div>
-    <span>Study Canvas</span>
+    <span>Studyboard v1</span>
   </div>
   <div class="tb-sep"></div>
 
-  <button class="tb-btn icon-only" id="btnNew" data-tip="New file  (Ctrl+Alt+N)">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg>
-  </button>
-  <button class="tb-btn icon-only" id="btnOpen" data-tip="Open  (Ctrl+O)">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-  </button>
-  <button class="tb-btn icon-only" id="btnSave" data-tip="Save  (Ctrl+S)">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
-  </button>
-  <button class="tb-btn icon-only" id="btnSaveAs" data-tip="Save as…  (Ctrl+Shift+S)">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6M9 14h6"/></svg>
+  <button class="tb-btn" id="btnHome" data-tip="All sessions  (Ctrl+O)">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+    <span class="lbl">Sessions</span>
   </button>
 
   <div class="tb-sep"></div>
-  <input id="docTitle" value="Untitled session" spellcheck="false" title="Session title">
-  <div id="dirtyDot" title="Unsaved changes"></div>
+  <input id="docTitle" value="Untitled session" spellcheck="false" title="Session name">
+  <span id="saveState"></span>
+  <button class="tb-btn icon-only" id="btnExport" data-tip="Export as a .study file (backup)">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+  </button>
   <div class="tb-sep"></div>
 
-  <button class="tb-btn" id="btnAddText" data-tip="Add a text block  (double-click canvas)">
+  <button class="tb-btn" id="btnAddText" data-tip="Add a note or A-size paper">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h16v2M12 5v14M9 19h6"/></svg>
     <span class="lbl">Text</span>
   </button>
@@ -603,20 +899,32 @@ svg{display:block;flex:none}
 
   <div class="tb-spacer"></div>
 
-  <button class="tb-btn" id="btnQuiz" data-tip="AI quiz from your notes">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
-    <span class="lbl">Quiz me</span>
-  </button>
-  <div class="tb-sep"></div>
-  <button class="tb-btn icon-only" id="btnTheme" data-tip="Light / dark theme">
+  <!-- default style for text you write next (size · colour · B/I/U · highlight) -->
+  <div class="tb-fmtbar">
+    <div class="tb-fontgroup" data-tip="Default text size for new notes">
+      <button class="tb-mini" id="defFontMinus" tabindex="-1">A−</button>
+      <input id="defFont" type="number" min="6" max="400" value="16" title="Default text size for new notes">
+      <button class="tb-mini" id="defFontPlus" tabindex="-1">A+</button>
+    </div>
+    <div class="tb-sep"></div>
+    <button class="tb-fmt" id="tbColor" data-tip="Default text colour"><span class="fmt-a">A</span><span class="fmt-bar" id="tbColorBar"></span></button>
+    <button class="tb-fmt" id="tbBold" data-tip="Bold new text"><b>B</b></button>
+    <button class="tb-fmt" id="tbItalic" data-tip="Italic new text"><i>I</i></button>
+    <button class="tb-fmt" id="tbUnder" data-tip="Underline new text"><span style="text-decoration:underline">U</span></button>
+    <button class="tb-fmt" id="tbHilite" data-tip="Default highlight"><span class="fmt-h">H</span></button>
+  </div>
+
+  <div class="tb-spacer"></div>
+
+  <button class="tb-btn icon-only tip-r" id="btnTheme" data-tip="Light / dark theme">
     <svg id="iconMoon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
     <svg id="iconSun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
   </button>
-  <button class="tb-btn icon-only" id="btnSettings" data-tip="Settings & API key">
+  <button class="tb-btn icon-only tip-r" id="btnSettings" data-tip="Settings & API key">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
   </button>
-  <button class="tb-btn icon-only" id="btnSidebar" data-tip="AI assistant panel">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
+  <button class="tb-btn icon-only tip-r" id="btnSidebar" data-tip="Ai assistant">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7V4"/><circle cx="12" cy="3" r="1.4"/><rect x="5" y="8" width="14" height="12" rx="3"/><path d="M5 13H3M21 13h-2"/><path d="M9.5 16.5h5"/><circle cx="9.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/></svg>
   </button>
 </header>
 
@@ -629,12 +937,6 @@ svg{display:block;flex:none}
       <div class="big">Your canvas is empty</div>
       <div>Double-click anywhere to add a text block · paste or drop pictures</div>
       <div>Pan with <kbd>middle mouse</kbd> or <kbd>Space</kbd>+drag · zoom with <kbd>Ctrl</kbd>+scroll</div>
-    </div>
-
-    <div id="restoreBar">
-      <span>💾 <b>Unsaved session found.</b> Restore it?</span>
-      <button class="btn primary" id="btnRestore">Restore</button>
-      <button class="btn ghost" id="btnDismissRestore">Dismiss</button>
     </div>
 
     <div id="zoomBar">
@@ -653,23 +955,63 @@ svg{display:block;flex:none}
     <!-- floating toolbar for the selected block -->
     <div id="blockBar"></div>
 
-    <!-- popover for AI actions on selected text -->
+    <!-- mindmap connector dots (one per side of the selected block) -->
+    <div id="linkHandles"></div>
+
+    <!-- smart alignment guides while dragging (PowerPoint-style) -->
+    <div id="alignGuides"></div>
+
+    <!-- popover for AI actions + formatting on selected text -->
     <div id="selPop">
       <button id="spExplain"><span class="sp-spark">✦</span>Explain</button>
       <button id="spSummarize"><span class="sp-spark">✦</span>Summarize</button>
       <button id="spTranslate"><span class="sp-spark">✦</span>Translate</button>
       <button id="spAsk"><span class="sp-spark">✦</span>Ask…</button>
+      <div class="sp-sep"></div>
+      <button id="spBold" data-tip="Bold"><b>B</b></button>
+      <button id="spItalic" data-tip="Italic"><i>I</i></button>
+      <button id="spUnder" data-tip="Underline"><u>U</u></button>
+      <div class="sp-sep"></div>
+      <button id="spColor" data-tip="Text color">Color</button>
+      <button id="spHilite" data-tip="Highlight" style="color:#c7a013">▆</button>
+      <button id="spSmaller" data-tip="Smaller text">A−</button>
+      <input id="spFontVal" type="number" min="6" max="400" title="Font size (type a number)">
+      <button id="spBigger" data-tip="Bigger text">A+</button>
+    </div>
+
+    <!-- formatting-only popover shown when double-clicking a text block -->
+    <div id="fmtPop">
+      <button id="fpColor">Text Color</button>
+      <button id="fpSmaller" data-tip="Smaller text">A−</button>
+      <input id="fpFontVal" type="number" min="6" max="400" title="Font size (type a number)">
+      <button id="fpBigger" data-tip="Bigger text">A+</button>
+      <div class="sp-sep"></div>
+      <button id="fpBold"><b>B</b></button>
+      <button id="fpItalic"><i>I</i></button>
+      <button id="fpUnder"><u>U</u></button>
+    </div>
+
+    <!-- in-app "Basic colors" picker for a text block's background -->
+    <div id="colorPop">
+      <div class="cp-title">Basic colors</div>
+      <div class="cp-grid"></div>
     </div>
   </div>
 
   <!-- ======================= AI SIDEBAR ======================= -->
   <aside id="sidebar">
+    <div id="sbResize" title="Drag to resize the panel"></div>
     <div class="sb-head">
       <div class="sb-title">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
-        AI Assistant
+        <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><rect x="1.5" y="1.5" width="45" height="45" rx="11" fill="#ffffff" stroke="#dcdfe6"/><g fill="none" stroke="#1c1f26" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12v4"/><rect x="13" y="16" width="22" height="18" rx="5"/><path d="M20 34v3M28 34v3"/><path d="M13 24H9M35 24h4"/><path d="M21 29h6"/></g><circle cx="24" cy="10" r="2" fill="#5b5bd6"/><circle cx="19.5" cy="24.5" r="2.1" fill="#1c1f26"/><circle cx="28.5" cy="24.5" r="2.1" fill="#1c1f26"/></svg>
+        <span class="sb-title-text">Ai assistant</span>
       </div>
-      <div class="grow"></div>
+      <button class="sb-ibtn" id="btnNewChat" data-tip="New chat">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="sb-ibtn" id="btnHistory" data-tip="Previous chats">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      </button>
       <button class="sb-ibtn" id="btnClearChat" data-tip="Clear conversation">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
       </button>
@@ -677,21 +1019,49 @@ svg{display:block;flex:none}
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>
-    <label class="ctx-row">
-      <span class="switch">
-        <input type="checkbox" id="ctxToggle" checked>
-        <span class="track"></span>
-      </span>
-      <span>Let the AI read this note as context</span>
-    </label>
+    <div id="chatHistory"></div>
+    <div class="skills">
+      <div class="skill-card" id="skillCard">
+        <div class="skill-head" id="skillHead">
+          <div class="skill-ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          </div>
+          <div class="skill-info">
+            <div class="skill-name">Read note as context</div>
+            <div class="skill-desc">Skill · Explain · Summarize · Translate · Ask · Quiz · Formatting</div>
+          </div>
+          <label class="switch" id="ctxSwitch" data-tip="Skill on / off">
+            <input type="checkbox" id="ctxToggle" checked>
+            <span class="track"></span>
+          </label>
+          <svg class="skill-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <div class="skill-body">
+          <button class="skill-chip" id="skExplain">✦ Explain</button>
+          <button class="skill-chip" id="skSummarize">✦ Summarize</button>
+          <button class="skill-chip" id="skTranslate">✦ Translate</button>
+          <button class="skill-chip" id="skAsk">✦ Ask</button>
+          <button class="skill-chip" id="skColor">Text color</button>
+          <button class="skill-chip" id="skSmaller">A− Smaller text</button>
+          <button class="skill-chip" id="btnQuiz">Quiz me</button>
+        </div>
+      </div>
+    </div>
     <div id="chatLog">
       <div id="chatEmpty">
-        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
+        <svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><rect x="1.5" y="1.5" width="45" height="45" rx="11" fill="#ffffff" stroke="#dcdfe6"/><g fill="none" stroke="#1c1f26" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12v4"/><rect x="13" y="16" width="22" height="18" rx="5"/><path d="M20 34v3M28 34v3"/><path d="M13 24H9M35 24h4"/><path d="M21 29h6"/></g><circle cx="24" cy="10" r="2" fill="#5b5bd6"/><circle cx="19.5" cy="24.5" r="2.1" fill="#1c1f26"/><circle cx="28.5" cy="24.5" r="2.1" fill="#1c1f26"/></svg>
         <div class="t">Ask me anything</div>
         <div class="s">I can explain topics, summarize your notes, translate text and quiz you on what you've written.</div>
       </div>
     </div>
     <div class="composer">
+      <div id="focusChip" class="focus-chip" hidden>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+        <span id="focusChipText">Asking about this note</span>
+        <button id="focusChipClear" data-tip="Ask about all notes" aria-label="Clear focus">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
       <div class="composer-box">
         <textarea id="chatInput" rows="1" placeholder="Ask about your notes…"></textarea>
         <button id="sendBtn" data-tip="Send  (Enter)">
@@ -705,15 +1075,16 @@ svg{display:block;flex:none}
 <!-- ======================= SETTINGS MODAL ======================= -->
 <div class="backdrop" id="settingsModal">
   <div class="modal">
-    <div class="modal-head">⚙️ Settings <div class="grow"></div></div>
+    <div class="modal-head">Settings <div class="grow"></div></div>
     <div class="modal-body">
       <div class="field">
-        <label for="setKey">DeepSeek API key</label>
-        <div class="input-row">
-          <input class="input" id="setKey" type="password" placeholder="sk-…" spellcheck="false" autocomplete="off">
-          <button class="btn ghost" id="btnShowKey" style="width:44px" data-tip="Show / hide">👁</button>
+        <label for="setThemeLevel">Light / Dark theme</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:12px;color:var(--text-dim)">Dark</span>
+          <input type="range" id="setThemeLevel" min="0" max="100" value="100" style="flex:1">
+          <span style="font-size:12px;color:var(--text-dim)">Light</span>
         </div>
-        <div class="hint">Stored only in this browser on this computer (localStorage). Get a key at platform.deepseek.com.</div>
+        <div class="hint">Drag to choose exactly how dark or light the app should be — applies instantly.</div>
       </div>
       <div class="field">
         <label for="setModel">Model</label>
@@ -728,6 +1099,14 @@ svg{display:block;flex:none}
           <option>Swedish</option><option>English</option><option>Arabic</option>
           <option>German</option><option>French</option><option>Spanish</option>
         </select>
+      </div>
+      <div class="field">
+        <label>Backup</label>
+        <button class="btn ghost" id="btnExportAll">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          Export as study files
+        </button>
+        <div class="hint">Saves every session into one .study backup file. Restore it with “Import file” on the home screen.</div>
       </div>
       <div>
         <button class="btn ghost" id="btnTestKey">Test connection</button>
@@ -744,7 +1123,7 @@ svg{display:block;flex:none}
 <!-- ======================= QUIZ MODAL ======================= -->
 <div class="backdrop" id="quizModal">
   <div class="modal">
-    <div class="modal-head">🎓 Quiz me <div class="grow"></div>
+    <div class="modal-head">Quiz me <div class="grow"></div>
       <button class="sb-ibtn" data-close="quizModal">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
@@ -765,6 +1144,54 @@ svg{display:block;flex:none}
   </div>
 </div>
 
+<!-- ======================= HOME / SESSION LIBRARY ======================= -->
+<div id="homeView">
+  <div class="home-inner">
+    <div class="home-top">
+      <div class="brand">
+        <div class="logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.2 3.2 8h17.6L12 2.2z"/><circle cx="12" cy="5.9" r="1.1" fill="#000" opacity=".25"/><rect x="4.6" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="8.9" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="13.2" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="17.5" y="9.3" width="2.3" height="7.2" rx="1.1"/><rect x="3.8" y="17.5" width="16.4" height="1.9" rx=".95"/><rect x="2.6" y="20.2" width="18.8" height="2" rx="1"/></svg>
+        </div>
+        <span style="font-size:19px">Studyboard v1</span>
+      </div>
+      <div class="grow" style="flex:1"></div>
+      <button class="tb-btn" id="btnImport" data-tip="Open a .study file from disk">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+        <span class="lbl">Import file</span>
+      </button>
+      <button class="tb-btn icon-only" id="btnThemeHome" data-tip="Light / dark theme">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+      </button>
+    </div>
+
+    <div class="home-search-wrap">
+      <div class="home-search">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="homeSearch" placeholder="Search your sessions…" spellcheck="false" autocomplete="off">
+        <kbd id="searchCount"></kbd>
+      </div>
+      <div id="searchSuggest"></div>
+    </div>
+
+    <div class="lib-label" id="libLabel">Your sessions</div>
+    <div id="sessionGrid">
+      <div class="tile new-tile" id="newTile" tabindex="0">
+        <div class="t-plus"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="fc-title" id="newTileLabel">New session +</div>
+      </div>
+    </div>
+    <div id="libEmpty" style="display:none">
+      <div>No sessions yet — click <b>New session</b> above to name your first one.</div>
+    </div>
+  </div>
+</div>
+
+<!-- right-click menu for the taskbar (top bar) -->
+<div id="tbMenu"></div>
+
+<!-- dropdown for the Text button: default note + A1–A5 paper sizes -->
+<div id="textMenu"></div>
+
 <div id="toasts"></div>
 <input type="file" id="imgInput" accept="image/*" multiple hidden>
 <input type="file" id="openInput" accept=".study,application/json" hidden>
@@ -780,12 +1207,17 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const uid = () => 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const escHtml = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
+function newChat(){
+  return { id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+           title: '', createdAt: Date.now(), updatedAt: Date.now(), messages: [] };
+}
 function newDocData(){
+  const c = newChat();
   return {
-    app: 'study-canvas', version: 1,
+    app: 'study-canvas', version: 2,
     title: 'Untitled session',
     canvas: { background: 'dots', view: { x: 0, y: 0, zoom: 1 } },
-    blocks: [], chat: []
+    blocks: [], links: [], chats: [c], activeChatId: c.id
   };
 }
 
@@ -793,9 +1225,6 @@ let doc = newDocData();
 let view = { x: 0, y: 0, zoom: 1 };        // screen = world * zoom + view
 let selectedId = null;
 let editingId = null;
-let dirty = false;
-let fileHandle = null;                      // FileSystemFileHandle when opened/saved via FS API
-let fileName = null;
 let undoStack = [], redoStack = [];
 let lastSnapshot = '[]';
 const blockEls = new Map();                 // id -> element
@@ -830,38 +1259,87 @@ function showConfirm(title, text, yesLabel = 'Continue'){
   });
 }
 
-/* ---------- theme ---------- */
-function setTheme(t){
-  document.documentElement.dataset.theme = t;
-  localStorage.setItem('sc-theme', t);
-  $('iconMoon').style.display = t === 'light' ? 'block' : 'none';
-  $('iconSun').style.display  = t === 'dark'  ? 'block' : 'none';
+/* ---------- theme: continuous scale from fully dark (0) to fully light (100).
+   The slider in Settings interpolates every design token between the two palettes;
+   the topbar button still toggles between the two extremes. ---------- */
+const THEME_LIGHT = {
+  'bg':'#eef0f4','surface':'#ffffff','surface-2':'#f4f5f8','surface-3':'#e9ebf0',
+  'border':'#dcdfe6','border-strong':'#c6cad3','text':'#1c1f26','text-dim':'#6b7280',
+  'text-faint':'#9aa1ad','accent':'#5b5bd6','accent-hover':'#4a4ac4','accent-soft':'#eceafd',
+  'danger':'#d64550','danger-soft':'#fdecee','ok':'#2e9e6b','ok-soft':'#e6f6ee',
+  'warn':'#c77b13','warn-soft':'#fdf3e2','dot':'#c9cdd6','sel':'#5b5bd6'
+};
+const THEME_DARK = {
+  'bg':'#15171c','surface':'#1e2128','surface-2':'#252932','surface-3':'#2d323d',
+  'border':'#343a46','border-strong':'#454c5b','text':'#e8eaef','text-dim':'#9aa1ad',
+  'text-faint':'#6b7280','accent':'#7b7bec','accent-hover':'#8f8ff2','accent-soft':'#2c2c4a',
+  'danger':'#e5606a','danger-soft':'#3a2226','ok':'#4cc38a','ok-soft':'#1c3229',
+  'warn':'#e0a341','warn-soft':'#38301d','dot':'#333945','sel':'#7b7bec'
+};
+function lerpHex(a, b, t){
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = sh => Math.round(((pa >> sh) & 255) + (((pb >> sh) & 255) - ((pa >> sh) & 255)) * t);
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
 }
-setTheme(localStorage.getItem('sc-theme') || 'light');
-$('btnTheme').addEventListener('click', () =>
-  setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
+let themeLevel = 100;
+function applyThemeLevel(v){
+  themeLevel = clamp(Math.round(v), 0, 100);
+  const t = themeLevel / 100;
+  const root = document.documentElement;
+  // Text colours must stay readable at every slider position. If we lerp them,
+  // the mid-slider surface (a mid-grey) and mid-lerped text meet in the middle and
+  // vanish. So snap text tokens to whichever side the slider is nearest instead.
+  const TEXT_KEYS = { text: 1, 'text-dim': 1, 'text-faint': 1 };
+  const side = t >= 0.5 ? THEME_LIGHT : THEME_DARK;
+  for (const k in THEME_LIGHT)
+    root.style.setProperty('--' + k,
+      TEXT_KEYS[k] ? side[k] : lerpHex(THEME_DARK[k], THEME_LIGHT[k], t));
+  const sel = lerpHex(THEME_DARK.sel, THEME_LIGHT.sel, t);
+  const sr = parseInt(sel.slice(1, 3), 16), sg = parseInt(sel.slice(3, 5), 16), sb = parseInt(sel.slice(5, 7), 16);
+  root.style.setProperty('--sel-soft', `rgba(${sr},${sg},${sb},.16)`);
+  root.dataset.theme = t >= 0.5 ? 'light' : 'dark';   // shadows + default paper follow the nearest side
+  localStorage.setItem('sc-theme-level', themeLevel);
+  $('iconMoon').style.display = t >= 0.5 ? 'block' : 'none';
+  $('iconSun').style.display  = t <  0.5 ? 'block' : 'none';
+  const s = $('setThemeLevel');
+  if (s && +s.value !== themeLevel) s.value = themeLevel;
+}
+(function initTheme(){
+  const stored = localStorage.getItem('sc-theme-level');
+  if (stored !== null) applyThemeLevel(+stored);
+  else applyThemeLevel(localStorage.getItem('sc-theme') === 'dark' ? 0 : 100);
+})();
+const toggleTheme = () => applyThemeLevel(themeLevel >= 50 ? 0 : 100);
+$('btnTheme').addEventListener('click', toggleTheme);
+$('setThemeLevel').addEventListener('input', e => applyThemeLevel(+e.target.value));
 
-/* ---------- dirty / autosave ---------- */
-function markDirty(){
-  dirty = true;
-  $('dirtyDot').classList.add('on');
-  scheduleAutosave();
+/* ---------- auto-save state ---------- */
+function setSaveState(s){
+  const el = $('saveState');
+  el.classList.toggle('saving', s === 'saving');
+  el.textContent = s === 'saving' ? 'Saving…' : s === 'saved' ? '✓ Saved' : '';
 }
-function markClean(){
-  dirty = false;
-  $('dirtyDot').classList.remove('on');
-}
+function markDirty(){ scheduleDbSave(); }
+function markClean(){ setSaveState('saved'); }
 
 /* ============================================================
    Infinite canvas: view transform
    ============================================================ */
+/* GPU-accelerate the transform only during active interaction, then drop the layer
+   ~200ms after the last change so the text re-rasterises sharply at the new zoom. */
+let _wcClearT = null;
+function bumpWillChange(){
+  world.classList.add('interacting');
+  clearTimeout(_wcClearT);
+  _wcClearT = setTimeout(() => world.classList.remove('interacting'), 200);
+}
 function applyView(){
   world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
   wrap.style.backgroundSize = `${26 * view.zoom}px ${26 * view.zoom}px`;
   wrap.style.backgroundPosition = `${view.x}px ${view.y}px`;
   $('zoomPct').textContent = Math.round(view.zoom * 100) + '%';
-  positionBlockBar();
-  hideSelPop();
+  bumpWillChange();
+  updateEditorToolbars();
 }
 function screenToWorld(sx, sy){
   const r = wrap.getBoundingClientRect();
@@ -953,7 +1431,16 @@ wrap.addEventListener('dblclick', e => {
 /* ============================================================
    Blocks: data & rendering
    ============================================================ */
-const PALETTE = ['#ffffff','#fff3bf','#d3f9d8','#d0ebff','#ffd8e4','#e5dbff','#ffe8cc','#2b3040'];
+// every block colour lives in the one in-app "Basic colors" picker — nothing outside it
+const BASIC_COLORS = [
+  // soft paper tones
+  ['White','#ffffff'], ['Cream','#fff3bf'], ['Mint','#d3f9d8'], ['Sky','#d0ebff'],
+  ['Rose','#ffd8e4'], ['Lavender','#e5dbff'], ['Peach','#ffe8cc'], ['Slate','#2b3040'],
+  // vivid basics
+  ['Red','#e03131'], ['Orange','#f76707'], ['Yellow','#f2c811'], ['Green','#2f9e44'],
+  ['Teal','#0ca678'], ['Blue','#1971c2'], ['Indigo','#3b5bdb'], ['Purple','#7048e8'],
+  ['Pink','#e64980'], ['Brown','#9c6644'], ['Gray','#868e96'], ['Black','#212529'],
+];
 function autoTextColor(bg){
   const h = bg.replace('#','');
   const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
@@ -965,14 +1452,98 @@ function defaultPaper(){
 function maxZ(){ return doc.blocks.reduce((m, b) => Math.max(m, b.z || 0), 0); }
 function getBlock(id){ return doc.blocks.find(b => b.id === id); }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let linkLayer = null;
 function renderAll(){
   world.innerHTML = '';
   blockEls.clear();
+  linkLayer = document.createElementNS(SVG_NS, 'svg');
+  linkLayer.id = 'linkLayer';
+  world.appendChild(linkLayer);
   for (const b of doc.blocks) world.appendChild(createBlockEl(b));
   if (selectedId && !getBlock(selectedId)) selectedId = null;
   editingId = null;
+  hideFmtPop();
   refreshSelectionUI();
+  renderLinks();
   updateEmptyHint();
+}
+
+/* ---------- mindmap connections (always plain white lines) ---------- */
+let selectedLinkId = null;
+function setLinkEnds(el, a, b){
+  el.setAttribute('x1', a.x + a.w / 2); el.setAttribute('y1', a.y + a.h / 2);
+  el.setAttribute('x2', b.x + b.w / 2); el.setAttribute('y2', b.y + b.h / 2);
+}
+function renderLinks(){
+  if (!linkLayer) return;
+  doc.links = (doc.links || []).filter(l => getBlock(l.from) && getBlock(l.to));
+  if (selectedLinkId && !doc.links.some(l => l.id === selectedLinkId)) selectedLinkId = null;
+  linkLayer.querySelectorAll('line:not(.temp)').forEach(l => l.remove());
+  for (const l of doc.links){
+    const el = document.createElementNS(SVG_NS, 'line');
+    el.dataset.id = l.id;
+    setLinkEnds(el, getBlock(l.from), getBlock(l.to));
+    if (l.id === selectedLinkId) el.classList.add('sel');
+    el.addEventListener('pointerdown', ev => {
+      if (ev.button !== 0) return;
+      ev.stopPropagation();
+      deselect();
+      selectedLinkId = l.id;
+      renderLinks();
+    });
+    linkLayer.appendChild(el);
+  }
+}
+function updateLinkPositions(){
+  if (!linkLayer) return;
+  linkLayer.querySelectorAll('line[data-id]').forEach(el => {
+    const l = doc.links.find(x => x.id === el.dataset.id);
+    if (!l) return;
+    const a = getBlock(l.from), b = getBlock(l.to);
+    if (a && b) setLinkEnds(el, a, b);
+  });
+}
+/* create a link by dragging from the connector handle onto another block */
+let linkDrag = null;
+function startLink(e, fromId){
+  if (e.button !== 0) return;
+  e.stopPropagation(); e.preventDefault();
+  const tmp = document.createElementNS(SVG_NS, 'line');
+  tmp.classList.add('temp');
+  const a = getBlock(fromId);
+  tmp.setAttribute('x1', a.x + a.w / 2); tmp.setAttribute('y1', a.y + a.h / 2);
+  tmp.setAttribute('x2', a.x + a.w / 2); tmp.setAttribute('y2', a.y + a.h / 2);
+  linkLayer.appendChild(tmp);
+  linkDrag = { from: fromId, tmp };
+  window.addEventListener('pointermove', onLinkMove);
+  window.addEventListener('pointerup', onLinkUp);
+}
+function onLinkMove(e){
+  if (!linkDrag) return;
+  const p = screenToWorld(e.clientX, e.clientY);
+  linkDrag.tmp.setAttribute('x2', p.x); linkDrag.tmp.setAttribute('y2', p.y);
+}
+function onLinkUp(e){
+  if (!linkDrag) return;
+  const p = screenToWorld(e.clientX, e.clientY);
+  const target = doc.blocks
+    .filter(b => b.id !== linkDrag.from &&
+      p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h)
+    .sort((a, b) => (b.z || 0) - (a.z || 0))[0];
+  const from = linkDrag.from;
+  linkDrag.tmp.remove();
+  linkDrag = null;
+  window.removeEventListener('pointermove', onLinkMove);
+  window.removeEventListener('pointerup', onLinkUp);
+  if (!target) return;
+  if (doc.links.some(l => (l.from === from && l.to === target.id) || (l.from === target.id && l.to === from))){
+    toast('Those blocks are already connected', '', 1600);
+    return;
+  }
+  doc.links.push({ id: uid(), from, to: target.id });
+  commit();
+  renderLinks();
 }
 function updateEmptyHint(){
   $('emptyHint').classList.toggle('hidden', doc.blocks.length > 0);
@@ -989,7 +1560,41 @@ function createBlockEl(b){
     c.contentEditable = 'false';
     c.spellcheck = false;
     el.appendChild(c);
-    c.addEventListener('blur', () => exitEdit(b.id));
+    if (b.paper){                      // Word-style page: fixed size + word count
+      el.classList.add('paper');
+      const count = document.createElement('div');
+      count.className = 'paper-count';
+      el.appendChild(count);
+      const updateCount = () => {
+        const words = (c.textContent.trim().match(/\S+/g) || []).length;
+        count.textContent = words === 1 ? '1 word' : words + ' words';
+      };
+      updateCount();
+      c.addEventListener('input', updateCount);
+    }
+    // typing limit (papers) + apply the default-style bar to whatever gets typed
+    c.addEventListener('beforeinput', e => {
+      const isDelete = e.inputType && e.inputType.startsWith('delete');
+      if (b.paper && !isDelete && c.scrollHeight > c.clientHeight + 1){   // page full → block
+        e.preventDefault();
+        const now = Date.now();
+        if (!window._pageFullT || now - window._pageFullT > 1800){
+          window._pageFullT = now;
+          toast('The ' + b.paper + ' page is full', 'err', 1600);
+        }
+        return;
+      }
+      if (e.inputType === 'insertText' && e.data && typeWithDefaults(c, e.data, b)){
+        e.preventDefault();
+        c.dispatchEvent(new Event('input'));   // keep the word count in sync
+      }
+    });
+    c.addEventListener('blur', e => {
+      // keep editing when focus only moves into a toolbar (e.g. the font-size field)
+      const rt = e.relatedTarget;
+      if (rt && rt.closest && rt.closest('#fmtPop, #selPop, #blockBar, #colorPop')) return;
+      exitEdit(b.id);
+    });
     c.addEventListener('input', () => { /* live typing: committed on blur */ });
   } else {
     const img = document.createElement('img');
@@ -999,8 +1604,8 @@ function createBlockEl(b){
   }
   syncBlockEl(b, el);
   el.addEventListener('pointerdown', e => onBlockPointerDown(e, b.id));
-  el.addEventListener('dblclick', e => {
-    if (b.type === 'text'){ e.stopPropagation(); enterEdit(b.id); }
+  if (b.type === 'text') el.addEventListener('dblclick', e => {
+    e.stopPropagation(); enterEdit(b.id, { clientX: e.clientX, clientY: e.clientY });
   });
   blockEls.set(b.id, el);
   return el;
@@ -1018,20 +1623,110 @@ function syncBlockEl(b, el = blockEls.get(b.id)){
     c.style.color = b.color;
     c.style.fontSize = (b.fontSize || 16) + 'px';
   }
+  updateLinkPositions();
 }
 
+/* ---------- default STYLE for new notes (topbar: size · colour · B/I/U · highlight) ---------- */
+let defaultFontSize = clamp(+localStorage.getItem('sc-default-font') || 16, 6, 400);
+let defaultBold      = localStorage.getItem('sc-def-bold') === '1';
+let defaultItalic    = localStorage.getItem('sc-def-italic') === '1';
+let defaultUnderline = localStorage.getItem('sc-def-under') === '1';
+let defaultColor     = localStorage.getItem('sc-def-color') || null;      // null = auto contrast
+let defaultHighlight = localStorage.getItem('sc-def-hilite') || null;     // null = none
+function setDefaultFontSize(v){
+  defaultFontSize = clamp(Math.round(v) || 16, 6, 400);
+  localStorage.setItem('sc-default-font', defaultFontSize);
+  const i = $('defFont');
+  if (i && document.activeElement !== i) i.value = defaultFontSize;
+}
+function setDefaultColor(c){ defaultColor = c || null; c ? localStorage.setItem('sc-def-color', c) : localStorage.removeItem('sc-def-color'); refreshDefaultFmtUI(); }
+function setDefaultHighlight(c){ defaultHighlight = (c && c !== 'transparent') ? c : null; defaultHighlight ? localStorage.setItem('sc-def-hilite', defaultHighlight) : localStorage.removeItem('sc-def-hilite'); refreshDefaultFmtUI(); }
+function refreshDefaultFmtUI(){
+  $('tbBold')  && $('tbBold').classList.toggle('active-toggle', defaultBold);
+  $('tbItalic')&& $('tbItalic').classList.toggle('active-toggle', defaultItalic);
+  $('tbUnder') && $('tbUnder').classList.toggle('active-toggle', defaultUnderline);
+  const bar = $('tbColorBar');
+  if (bar) bar.style.background = defaultColor || 'var(--text-dim)';
+  const h = $('tbHilite');
+  if (h){
+    h.classList.toggle('active-toggle', !!defaultHighlight);
+    h.querySelector('.fmt-h').style.background = defaultHighlight || 'transparent';
+  }
+}
+// Apply the current defaults to a freshly-created, empty note being edited.
+// The default-style bar governs the NEXT text typed anywhere (new AND existing notes).
+// New typing is wrapped in a span carrying the current defaults; consecutive typing
+// reuses the same span (matched by a signature) so it doesn't fragment.
+function defaultStyleSig(){
+  return [defaultFontSize, defaultBold ? 1 : 0, defaultItalic ? 1 : 0, defaultUnderline ? 1 : 0,
+          defaultColor || '', defaultHighlight || ''].join('|');
+}
+function defaultsAreStyled(){
+  return defaultBold || defaultItalic || defaultUnderline || !!defaultColor || !!defaultHighlight;
+}
+function makeDefaultSpan(){
+  const s = document.createElement('span');
+  s.dataset.dfmt = defaultStyleSig();
+  s.style.fontSize = (defaultFontSize || 16) + 'px';
+  if (defaultBold)      s.style.fontWeight = '700';
+  if (defaultItalic)    s.style.fontStyle = 'italic';
+  if (defaultUnderline) s.style.textDecoration = 'underline';
+  if (defaultColor)     s.style.color = defaultColor;
+  if (defaultHighlight) s.style.backgroundColor = defaultHighlight;
+  return s;
+}
+// insert typed text with the default style at the caret; returns true if it handled the input
+function typeWithDefaults(content, data, b){
+  const sel = document.getSelection();
+  if (!sel || !sel.isCollapsed || !sel.rangeCount) return false;
+  const r = sel.getRangeAt(0);
+  const sig = defaultStyleSig();
+  // already inside a span that matches the current defaults → let the browser type normally
+  const hostEl = r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer;
+  const host = hostEl && hostEl.closest ? hostEl.closest('span[data-dfmt]') : null;
+  if (host && host.dataset.dfmt === sig) return false;
+  // only intervene if the defaults actually change the look here
+  if (!defaultsAreStyled() && rangeFontPx(r, b) === (defaultFontSize || 16)) return false;
+  const span = makeDefaultSpan();
+  span.textContent = data;
+  r.deleteContents();
+  r.insertNode(span);
+  const nr = document.createRange();
+  nr.setStart(span.firstChild, data.length); nr.collapse(true);
+  sel.removeAllRanges(); sel.addRange(nr);
+  return true;
+}
+(function initDefaultFmt(){
+  const i = $('defFont');
+  if (i) i.value = defaultFontSize;
+  $('defFontMinus').addEventListener('click', () => setDefaultFontSize(defaultFontSize - 2));
+  $('defFontPlus').addEventListener('click', () => setDefaultFontSize(defaultFontSize + 2));
+  i.addEventListener('change', e => setDefaultFontSize(+e.target.value));
+  i.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter'){ e.preventDefault(); setDefaultFontSize(+e.target.value); e.target.blur(); }
+  });
+  $('tbBold').addEventListener('click',   () => { defaultBold = !defaultBold;           localStorage.setItem('sc-def-bold',  defaultBold ? '1':'0');  refreshDefaultFmtUI(); });
+  $('tbItalic').addEventListener('click', () => { defaultItalic = !defaultItalic;       localStorage.setItem('sc-def-italic',defaultItalic?'1':'0');   refreshDefaultFmtUI(); });
+  $('tbUnder').addEventListener('click',  () => { defaultUnderline = !defaultUnderline; localStorage.setItem('sc-def-under', defaultUnderline?'1':'0'); refreshDefaultFmtUI(); });
+  $('tbColor').addEventListener('click',  () => openColorPop($('tbColor'), null, 'defFore'));
+  $('tbHilite').addEventListener('click', () => openColorPop($('tbHilite'), null, 'defHilite'));
+  refreshDefaultFmtUI();
+})();
+
 /* ---------- creating blocks ---------- */
-function addTextBlock(x, y, html = ''){
-  if (x === undefined){ const c = viewportCenterWorld(); x = c.x - 130; y = c.y - 70; }
+function addTextBlock(x, y, html = '', size = null){
+  const w = size ? size.w : 260, h = size ? size.h : 140;
+  if (x === undefined){ const c = viewportCenterWorld(); x = c.x - w / 2; y = c.y - h / 2; }
   const bg = defaultPaper();
   const b = { id: uid(), type: 'text', x: Math.round(x), y: Math.round(y),
-              w: 260, h: 140, html, bg, color: autoTextColor(bg), fontSize: 16, z: maxZ() + 1 };
+              w, h, html, bg, color: defaultColor || autoTextColor(bg), fontSize: defaultFontSize, z: maxZ() + 1 };
   doc.blocks.push(b);
   world.appendChild(createBlockEl(b));
   commit();
   updateEmptyHint();
   selectBlock(b.id);
-  if (!html) enterEdit(b.id);
+  if (!html) enterEdit(b.id);   // typed text picks up the default style via beforeinput
   return b;
 }
 function addImageBlock(src, natW, natH, x, y){
@@ -1063,6 +1758,7 @@ function selectBlock(id){
 function deselect(){
   if (editingId) exitEdit(editingId);
   selectedId = null;
+  if (selectedLinkId){ selectedLinkId = null; renderLinks(); }
   refreshSelectionUI();
 }
 function refreshSelectionUI(){
@@ -1084,17 +1780,35 @@ function refreshSelectionUI(){
     buildBlockBar(b);
   }
   positionBlockBar();
+  updateFocusChip();
+}
+// Show which note the AI is focused on, so a typed question targets that page.
+function updateFocusChip(){
+  const chip = $('focusChip');
+  if (!chip) return;
+  const b = focusedTextBlock();
+  if (!b){ chip.hidden = true; return; }
+  chip.hidden = false;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = b.html || '';
+  const words = tmp.innerText.trim().replace(/\s+/g, ' ');
+  const kind = b.paper ? b.paper + ' page' : 'note';
+  $('focusChipText').textContent = words
+    ? 'Asking about: ' + (words.length > 34 ? words.slice(0, 34) + '…' : words)
+    : 'Asking about this ' + kind;
 }
 
 function onBlockPointerDown(e, id){
   if (e.button !== 0 || spaceDown) return;
   if (e.target.classList.contains('handle')) return;
   const b = getBlock(id);
+  const wasSel = selectedId === id;          // was it already selected before this click?
   selectBlock(id);
   if (editingId === id) return;              // editing: let the caret work
   e.preventDefault();
   const p = screenToWorld(e.clientX, e.clientY);
-  dragState = { mode: 'move', id, ox: p.x - b.x, oy: p.y - b.y, moved: false };
+  dragState = { mode: 'move', id, ox: p.x - b.x, oy: p.y - b.y, moved: false,
+                dragged: false, wasSel, clickX: e.clientX, clickY: e.clientY };
   blockEls.get(id).classList.add('dragging');
   window.addEventListener('pointermove', onDragMove);
   window.addEventListener('pointerup', onDragEnd);
@@ -1109,15 +1823,86 @@ function startResize(e, id, dir){
   window.addEventListener('pointermove', onDragMove);
   window.addEventListener('pointerup', onDragEnd);
 }
+/* ---------- PowerPoint-style smart alignment guides ---------- */
+const SNAP_PX = 6;   // how close (in screen pixels) an edge must get before it snaps
+/* Snap the dragged block so its left/centre/right or top/middle/bottom lines up with
+   any other block's matching edge; returns the world coords of every line that matched. */
+function snapAndGuides(b){
+  const others = doc.blocks.filter(o => o.id !== b.id);
+  const out = { V: [], H: [] };
+  if (!others.length) return out;
+  const thr = SNAP_PX / view.zoom;
+  const targV = [], targH = [];
+  for (const o of others){
+    targV.push(o.x, o.x + o.w / 2, o.x + o.w);
+    targH.push(o.y, o.y + o.h / 2, o.y + o.h);
+  }
+  const pick = (edges, targets) => {
+    let best = null;
+    for (const d of edges) for (const t of targets){
+      const dd = t - d;
+      if (Math.abs(dd) <= thr && (best === null || Math.abs(dd) < Math.abs(best))) best = dd;
+    }
+    return best;
+  };
+  const bx = pick([b.x, b.x + b.w / 2, b.x + b.w], targV);
+  if (bx !== null) b.x = Math.round(b.x + bx);
+  const by = pick([b.y, b.y + b.h / 2, b.y + b.h], targH);
+  if (by !== null) b.y = Math.round(b.y + by);
+  // after snapping, collect every target line that now coincides with an edge (for drawing)
+  const edgesV = [b.x, b.x + b.w / 2, b.x + b.w], edgesH = [b.y, b.y + b.h / 2, b.y + b.h];
+  for (const t of targV) if (edgesV.some(d => Math.abs(t - d) < 1.1) && !out.V.includes(t)) out.V.push(t);
+  for (const t of targH) if (edgesH.some(d => Math.abs(t - d) < 1.1) && !out.H.includes(t)) out.H.push(t);
+  return out;
+}
+/* Snap the edge(s) being resized to other blocks' edges/centres; returns the lines that matched. */
+function snapResizeEdges(b, dir){
+  const others = doc.blocks.filter(o => o.id !== b.id);
+  const out = { V: [], H: [] };
+  if (!others.length) return out;
+  const thr = SNAP_PX / view.zoom, MIN_W = 70, MIN_H = 44;
+  const targV = [], targH = [];
+  for (const o of others){
+    targV.push(o.x, o.x + o.w / 2, o.x + o.w);
+    targH.push(o.y, o.y + o.h / 2, o.y + o.h);
+  }
+  const nearest = (val, targets) => {
+    let best = null;
+    for (const t of targets){
+      const dd = t - val;
+      if (Math.abs(dd) <= thr && (best === null || Math.abs(dd) < Math.abs(best.d))) best = { d: dd, t };
+    }
+    return best;
+  };
+  if (dir.includes('e')){ const s = nearest(b.x + b.w, targV); if (s && s.t - b.x >= MIN_W){ b.w = Math.round(s.t - b.x); out.V.push(s.t); } }
+  else if (dir.includes('w')){ const right = b.x + b.w; const s = nearest(b.x, targV); if (s && right - s.t >= MIN_W){ b.x = Math.round(s.t); b.w = Math.round(right - b.x); out.V.push(s.t); } }
+  if (dir.includes('s')){ const s = nearest(b.y + b.h, targH); if (s && s.t - b.y >= MIN_H){ b.h = Math.round(s.t - b.y); out.H.push(s.t); } }
+  else if (dir.includes('n')){ const bottom = b.y + b.h; const s = nearest(b.y, targH); if (s && bottom - s.t >= MIN_H){ b.y = Math.round(s.t); b.h = Math.round(bottom - b.y); out.H.push(s.t); } }
+  return out;
+}
+function renderGuides(g){
+  const cont = $('alignGuides');
+  if (!g.V.length && !g.H.length){ cont.classList.remove('show'); cont.innerHTML = ''; return; }
+  let html = '';
+  for (const x of g.V) html += `<div class="gv" style="left:${x * view.zoom + view.x}px"></div>`;
+  for (const y of g.H) html += `<div class="gh" style="top:${y * view.zoom + view.y}px"></div>`;
+  cont.innerHTML = html;
+  cont.classList.add('show');
+}
+function hideGuides(){ const c = $('alignGuides'); c.classList.remove('show'); c.innerHTML = ''; }
+
 function onDragMove(e){
   if (!dragState) return;
   const b = getBlock(dragState.id);
   if (!b) return;
   dragState.moved = true;
   if (dragState.mode === 'move'){
+    if (!dragState.dragged && Math.hypot(e.clientX - dragState.clickX, e.clientY - dragState.clickY) > 4)
+      dragState.dragged = true;              // distinguish a real drag from a click
     const p = screenToWorld(e.clientX, e.clientY);
     b.x = Math.round(p.x - dragState.ox);
     b.y = Math.round(p.y - dragState.oy);
+    renderGuides(e.altKey ? { V: [], H: [] } : snapAndGuides(b));   // hold Alt to move freely
   } else {
     const dx = (e.clientX - dragState.px) / view.zoom;
     const dy = (e.clientY - dragState.py) / view.zoom;
@@ -1138,6 +1923,8 @@ function onDragMove(e){
     if (h < MIN_H){ if (d.includes('n')) y -= (MIN_H - h); h = MIN_H; }
     b.x = Math.round(x); b.y = Math.round(y);
     b.w = Math.round(w); b.h = Math.round(h);
+    if (b.type === 'image' && dragState.dir.length === 2) hideGuides();   // aspect-locked corner: leave ratio alone
+    else renderGuides(e.altKey ? { V: [], H: [] } : snapResizeEdges(b, dragState.dir));
   }
   syncBlockEl(b);
   positionBlockBar();
@@ -1147,24 +1934,54 @@ function onDragEnd(){
   const el = blockEls.get(dragState.id);
   if (el) el.classList.remove('dragging');
   if (dragState.moved) commit();
+  hideGuides();
+  const ds = dragState;
   dragState = null;
   window.removeEventListener('pointermove', onDragMove);
   window.removeEventListener('pointerup', onDragEnd);
+  // Word/PowerPoint style: a plain click (no drag) on an already-selected text block enters
+  // editing with the caret placed exactly where you clicked — not always at the same spot.
+  const b = getBlock(ds.id);
+  if (ds.mode === 'move' && !ds.dragged && ds.wasSel && b && b.type === 'text' && editingId !== ds.id)
+    enterEdit(ds.id, { clientX: ds.clickX, clientY: ds.clickY });
 }
 
 /* ---------- text editing ---------- */
-function enterEdit(id){
+/* put the caret exactly under the pointer (works in both Chrome and Firefox) */
+function placeCaretAtPoint(x, y){
+  let range = null;
+  if (document.caretRangeFromPoint) {                       // Chromium
+    range = document.caretRangeFromPoint(x, y);
+  } else if (document.caretPositionFromPoint) {             // Firefox
+    const pos = document.caretPositionFromPoint(x, y);
+    if (pos){ range = document.createRange(); range.setStart(pos.offsetNode, pos.offset); range.collapse(true); }
+  }
+  if (range){
+    const sel = document.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
+  }
+  return false;
+}
+function enterEdit(id, pt){
   const b = getBlock(id);
   if (!b || b.type !== 'text') return;
+  const c = blockEls.get(id) && blockEls.get(id).firstChild;
+  if (editingId === id){                                    // already editing → just move the caret
+    if (pt && c) placeCaretAtPoint(pt.clientX, pt.clientY);
+    return;
+  }
   selectBlock(id);
   editingId = id;
   const el = blockEls.get(id);
   el.classList.add('editing');
-  const c = el.firstChild;
-  c.contentEditable = 'true';
-  c.focus();
-  document.execCommand('selectAll', false);
-  document.getSelection().collapseToEnd();
+  el.firstChild.contentEditable = 'true';
+  el.firstChild.focus();
+  // caret where you clicked (Word-like); fall back to end of text for keyboard/empty blocks
+  const placed = pt && el.firstChild.textContent.length ? placeCaretAtPoint(pt.clientX, pt.clientY) : false;
+  if (!placed){ document.execCommand('selectAll', false); document.getSelection().collapseToEnd(); }
+  updateEditorToolbars();
 }
 function exitEdit(id){
   if (editingId !== id) return;
@@ -1176,7 +1993,9 @@ function exitEdit(id){
   c.contentEditable = 'false';
   const html = c.innerHTML;
   if (html !== b.html){ b.html = html; commit(); }
-  hideSelPop();
+  if (b.paper) c.scrollTop = 0;      // a page always shows its content from the top
+  updateEditorToolbars();
+  updateFocusChip();                 // note text may have changed
 }
 
 /* ---------- block operations ---------- */
@@ -1184,11 +2003,13 @@ function deleteBlock(id){
   const i = doc.blocks.findIndex(b => b.id === id);
   if (i < 0) return;
   doc.blocks.splice(i, 1);
+  doc.links = doc.links.filter(l => l.from !== id && l.to !== id);
   const el = blockEls.get(id);
   if (el) el.remove();
   blockEls.delete(id);
   if (selectedId === id){ selectedId = null; refreshSelectionUI(); }
   commit();
+  renderLinks();
   updateEmptyHint();
 }
 function duplicateBlock(id){
@@ -1213,7 +2034,8 @@ function sendBack(id){
    Floating block toolbar
    ============================================================ */
 const blockBar = $('blockBar');
-blockBar.addEventListener('pointerdown', e => e.preventDefault()); // keep text selection alive
+const colorPop = $('colorPop');
+blockBar.addEventListener('pointerdown', e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); }); // keep text selection alive (but let the font input focus)
 
 function buildBlockBar(b){
   const svgFront = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V4a1 1 0 0 1 1-1h11"/></svg>';
@@ -1222,12 +2044,9 @@ function buildBlockBar(b){
   const svgTrash = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
   let html = '';
   if (b.type === 'text'){
-    html += '<div class="swatches">' + PALETTE.map(c =>
-      `<div class="swatch${c === b.bg ? ' picked' : ''}" data-bg="${c}" style="background:${c}" title="Background"></div>`).join('') +
-      `<div class="color-well" title="Custom background"><input type="color" id="bbCustomBg" value="${b.bg && b.bg.startsWith('#') ? b.bg : '#ffffff'}"></div>` +
-      '</div><div class="bb-sep"></div>';
+    html += `<div class="swatches"><div class="color-well" id="bbCustomBg" title="Colors" style="background:${b.bg && b.bg.startsWith('#') ? b.bg : 'conic-gradient(red,yellow,lime,cyan,blue,magenta,red)'}"></div></div><div class="bb-sep"></div>`;
     html += `<button class="bb-btn" id="bbFontMinus" data-tip="Smaller text">A−</button>
-      <span id="fontSizeVal">${b.fontSize || 16}</span>
+      <input id="fontSizeInput" type="number" min="6" max="400" value="${b.fontSize || 16}" title="Font size (type a number)">
       <button class="bb-btn" id="bbFontPlus" data-tip="Bigger text">A+</button>
       <div class="bb-sep"></div>
       <button class="bb-btn" id="bbBold" data-tip="Bold (while editing)"><b>B</b></button>
@@ -1243,30 +2062,32 @@ function buildBlockBar(b){
   blockBar.innerHTML = html;
 
   if (b.type === 'text'){
-    blockBar.querySelectorAll('.swatch').forEach(s => s.addEventListener('click', () => {
-      b.bg = s.dataset.bg;
-      b.color = autoTextColor(b.bg);
-      syncBlockEl(b); commit(); buildBlockBar(b);
-    }));
-    $('bbCustomBg').addEventListener('input', e => {
-      b.bg = e.target.value; b.color = autoTextColor(b.bg);
-      syncBlockEl(b);
+    $('bbCustomBg').addEventListener('click', e => {
+      e.stopPropagation();
+      const openHere = colorPop.classList.contains('show') && cpMode === 'bg';
+      closeColorPop();
+      if (!openHere) openColorPop($('bbCustomBg'), b, 'bg');
     });
-    $('bbCustomBg').addEventListener('change', () => commit());
-    $('bbFontMinus').addEventListener('click', () => {
-      b.fontSize = clamp((b.fontSize || 16) - 2, 10, 60);
-      syncBlockEl(b); commit(); $('fontSizeVal').textContent = b.fontSize;
-    });
-    $('bbFontPlus').addEventListener('click', () => {
-      b.fontSize = clamp((b.fontSize || 16) + 2, 10, 60);
-      syncBlockEl(b); commit(); $('fontSizeVal').textContent = b.fontSize;
+    const setFont = v => { b.fontSize = clamp(Math.round(v) || 16, 6, 400);
+      syncBlockEl(b); commit(); $('fontSizeInput').value = b.fontSize; };
+    $('bbFontMinus').addEventListener('click', () => setFont((b.fontSize || 16) - 2));
+    $('bbFontPlus').addEventListener('click', () => setFont((b.fontSize || 16) + 2));
+    $('fontSizeInput').addEventListener('change', e => setFont(+e.target.value));
+    $('fontSizeInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter'){ e.preventDefault(); setFont(+e.target.value); e.target.blur(); }
+      e.stopPropagation();     // don't let digits trigger canvas shortcuts
     });
     const fmt = (btnId, cmd, val) => $(btnId).addEventListener('click', () => {
       if (editingId !== b.id) enterEdit(b.id);
       document.execCommand(cmd, false, val);
     });
     fmt('bbBold', 'bold'); fmt('bbItalic', 'italic'); fmt('bbUnder', 'underline');
-    fmt('bbHilite', 'hiliteColor', '#fff59d');
+    $('bbHilite').addEventListener('click', e => {
+      e.stopPropagation();
+      const openHere = colorPop.classList.contains('show') && cpMode === 'hilite';
+      closeColorPop();
+      if (!openHere) openColorPop($('bbHilite'), b, 'hilite');
+    });
   }
   $('bbFront').addEventListener('click', () => bringFront(b.id));
   $('bbBack').addEventListener('click', () => sendBack(b.id));
@@ -1276,7 +2097,10 @@ function buildBlockBar(b){
 
 function positionBlockBar(){
   const b = selectedId && getBlock(selectedId);
-  if (!b){ blockBar.classList.remove('show'); return; }
+  // a text-selection menu (selPop) or the double-click formatting menu (fmtPop) replaces the
+  // block toolbar — never show blockBar at the same time, so they can't pile up / cover the block
+  const menuUp = selPop.classList.contains('show') || fmtPop.classList.contains('show');
+  if (!b || menuUp){ blockBar.classList.remove('show'); if (!b) closeColorPop(); positionLinkHandles(); return; }
   blockBar.classList.add('show');
   const r = wrap.getBoundingClientRect();
   const bx = b.x * view.zoom + view.x;
@@ -1289,12 +2113,298 @@ function positionBlockBar(){
   top = clamp(top, 8, r.height - barH - 8);
   blockBar.style.left = left + 'px';
   blockBar.style.top = top + 'px';
+  positionLinkHandles();
 }
+
+/* mindmap connector dots — one on each side of the selected block, in an overlay
+   above the toolbar so every direction stays grabbable. Drag one onto another block. */
+const linkHandles = $('linkHandles');
+function buildLinkHandles(){
+  linkHandles.innerHTML = '';
+  for (const dir of ['n', 's', 'e', 'w']){
+    const d = document.createElement('div');
+    d.className = 'lh lh-' + dir;
+    d.title = 'Drag onto another block to connect them';
+    d.addEventListener('pointerdown', e => { if (selectedId) startLink(e, selectedId); });
+    linkHandles.appendChild(d);
+  }
+}
+buildLinkHandles();
+function positionLinkHandles(){
+  const b = selectedId && getBlock(selectedId);
+  if (!b){ linkHandles.classList.remove('show'); return; }
+  linkHandles.classList.add('show');
+  const x = b.x * view.zoom + view.x, y = b.y * view.zoom + view.y;
+  const w = b.w * view.zoom, h = b.h * view.zoom, off = 22;
+  const pos = {
+    n: [x + w / 2, y - off],
+    s: [x + w / 2, y + h + off],
+    e: [x + w + off, y + h / 2],
+    w: [x - off,   y + h / 2]
+  };
+  for (const dir in pos){
+    const el = linkHandles.querySelector('.lh-' + dir);
+    el.style.left = pos[dir][0] + 'px';
+    el.style.top  = pos[dir][1] + 'px';
+  }
+}
+
+/* ---------- in-app "Basic colors" picker for a text block's background.
+   One click on a swatch = test/preview the colour live (not saved).
+   Second click on the same swatch = use it (commit). Closing without a second
+   click cancels and reverts to the colour the block had when the picker opened. ---------- */
+let colorPopBlock = null, cpOrigBg = null, cpPreviewC = null, cpMode = 'bg', cpDidPreview = false;
+function openColorPop(anchor, b, mode){
+  colorPopBlock = b;
+  cpMode = mode || 'bg';
+  cpOrigBg = b ? b.bg : null;
+  cpDidPreview = false;
+  const isDef = cpMode === 'defFore' || cpMode === 'defHilite';
+  const foreWhole = cpMode === 'fore' && !foreIsSelection;
+  // set up the text-colour / highlight preview snapshot
+  if (cpMode === 'fore' || cpMode === 'hilite'){
+    cpOrigColor = (cpMode === 'fore' && b) ? b.color : null;
+    const content = blockEls.get(b.id).firstChild;
+    const hasSel = cpMode === 'hilite' ? true : foreIsSelection;   // highlight is always on a selection
+    foreSnap = { html: content.innerHTML, off: hasSel ? selOffsets(content) : null };
+  }
+  // seed with the current colour so clicking the already-chosen swatch confirms in one click
+  cpPreviewC = cpMode === 'bg' ? (b.bg || '').toLowerCase()
+             : foreWhole ? (b.color || '').toLowerCase() : null;
+  colorPop.querySelector('.cp-title').textContent =
+    cpMode === 'defHilite' ? 'Default highlight' : cpMode === 'defFore' ? 'Default text color' :
+    cpMode === 'hilite' ? 'Highlight color' : cpMode === 'fore' ? 'Text color' : 'Basic colors';
+  const cur = cpMode === 'bg' ? (b.bg || '').toLowerCase()
+            : foreWhole ? (b.color || '').toLowerCase()
+            : cpMode === 'defFore' ? (defaultColor || '').toLowerCase()
+            : cpMode === 'defHilite' ? (defaultHighlight || '').toLowerCase() : null;
+  const grid = colorPop.querySelector('.cp-grid');
+  // default modes + the highlight picker get a leading "None" swatch (clear default / remove highlight)
+  const showNone = isDef || cpMode === 'hilite';
+  const none = showNone
+    ? `<div class="cp-swatch cp-none${isDef && !cur ? ' picked' : ''}" data-c="none" title="${cpMode === 'hilite' ? 'Remove highlight' : 'None'}"></div>`
+    : '';
+  grid.innerHTML = none + BASIC_COLORS.map(([name, c]) =>
+    `<div class="cp-swatch${c.toLowerCase() === cur ? ' picked' : ''}" data-c="${c}" title="${name}" style="background:${c}"></div>`).join('');
+  colorPop.classList.add('show');
+  const wr = wrap.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
+  const pw = colorPop.offsetWidth, ph = colorPop.offsetHeight;
+  const left = clamp(ar.left - wr.left + ar.width / 2 - pw / 2, 8, wr.width - pw - 8);
+  let top = ar.bottom - wr.top + 8;
+  if (top + ph > wr.height - 8) top = ar.top - wr.top - ph - 8;
+  colorPop.style.left = left + 'px';
+  colorPop.style.top = top + 'px';
+}
+function closeColorPop(committed){
+  // closing without the second-click confirm → KEEP the previewed colour (save it),
+  // instead of reverting. Only when a preview was actually made.
+  if (colorPopBlock && !committed && cpDidPreview){
+    if (cpMode === 'fore' || cpMode === 'hilite'){ commitFore(colorPopBlock); }
+    else { commit(); buildBlockBar(colorPopBlock); }   // bg: preview already set b.bg live
+  }
+  colorPop.classList.remove('show');
+  colorPopBlock = null; cpOrigBg = null; cpPreviewC = null; cpMode = 'bg';
+  foreIsSelection = false; foreSnap = null; cpOrigColor = null; cpDidPreview = false;
+}
+// colour equality that works across '#rrggbb' and 'rgb(r, g, b)' forms
+function rgbTriplet(str){
+  if (!str) return null;
+  if (str[0] === '#'){
+    const h = str.slice(1);
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  const m = str.match(/\d+/g);
+  return m && m.length >= 3 ? [+m[0], +m[1], +m[2]] : null;
+}
+function sameColor(a, c){
+  const x = rgbTriplet(a), y = rgbTriplet(c);
+  return !!x && !!y && x[0] === y[0] && x[1] === y[1] && x[2] === y[2];
+}
+// the highlight colour on a text node = nearest inline background between it and the editable root
+function textNodeHighlight(node, root){
+  let el = node.parentElement;
+  while (el && el !== root){
+    const bg = el.style && el.style.backgroundColor;
+    if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') return bg;
+    el = el.parentElement;
+  }
+  return null;
+}
+/* Highlight the current selection with colour c, toggling like a marker:
+   - if every selected bit is already highlighted with c → remove the highlight
+   - otherwise → highlight the whole selection with c (even if part of it was already c) */
+function applyHighlight(b, c){
+  if (editingId !== b.id) enterEdit(b.id);
+  const sel = document.getSelection();
+  if (!sel.rangeCount || sel.isCollapsed){ document.execCommand('hiliteColor', false, c); return; }
+  const range = sel.getRangeAt(0);
+  const root = blockEls.get(b.id).firstChild;
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())){
+    if (n.textContent.trim() && range.intersectsNode(n)) nodes.push(n);
+  }
+  const fullyC = nodes.length > 0 && nodes.every(node => sameColor(textNodeHighlight(node, root), c));
+  document.execCommand('hiliteColor', false, fullyC ? 'transparent' : c);
+}
+/* ---------- text colour (character/selection level, or the whole block) ----------
+   Same interaction as note colours: first click previews live (no commit), a second
+   click on the same swatch confirms, and closing without that confirm reverts. */
+let foreIsSelection = false;   // is this a selection recolour (vs whole block)?
+let foreSnap = null;           // {html, off} clean snapshot for reverting selection previews
+let cpOrigColor = null;        // whole-block original colour to revert to
+// save/restore a selection by character offsets so it survives innerHTML swaps
+function selOffsets(content){
+  const sel = document.getSelection();
+  if (!sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  const pre = document.createRange();
+  pre.selectNodeContents(content); pre.setEnd(r.startContainer, r.startOffset);
+  const start = pre.toString().length;
+  return { start, end: start + r.toString().length };
+}
+function restoreSel(content, o){
+  if (!o) return;
+  const walk = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+  let node, chars = 0, sN = null, sO = 0, eN = null, eO = 0;
+  while ((node = walk.nextNode())){
+    const len = node.textContent.length;
+    if (!sN && o.start <= chars + len){ sN = node; sO = o.start - chars; }
+    if (o.end <= chars + len){ eN = node; eO = o.end - chars; break; }
+    chars += len;
+  }
+  if (sN && eN){ const r = document.createRange(); r.setStart(sN, sO); r.setEnd(eN, eO); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+}
+// strip inline TEXT colours (keeps background-color highlights) so a whole-block
+// colour actually shows on every character, not just the list marker
+function clearInlineColors(node){
+  node.querySelectorAll('[style*="color"]').forEach(el => {
+    el.style.color = '';
+    if (!el.getAttribute('style')) el.removeAttribute('style');
+  });
+  node.querySelectorAll('font[color]').forEach(f => f.removeAttribute('color'));
+}
+function foreEnsureEditing(b){
+  const el = blockEls.get(b.id), content = el.firstChild;
+  if (editingId !== b.id){
+    if (editingId) exitEdit(editingId);
+    selectBlock(b.id);
+    editingId = b.id;
+    el.classList.add('editing');
+    content.contentEditable = 'true';
+    content.focus();
+  }
+  return content;
+}
+function openForeColor(anchor, b){
+  const openHere = colorPop.classList.contains('show') && cpMode === 'fore';
+  const sel = document.getSelection();
+  const el = blockEls.get(b.id);
+  const isSel = !!(sel && sel.rangeCount && !sel.isCollapsed && el && el.contains(sel.anchorNode));
+  closeColorPop();                 // resets fore state — so set the flag AFTER
+  if (openHere) return;            // clicking the button again just closes
+  foreIsSelection = isSel;
+  openColorPop(anchor, b, 'fore');
+}
+// live preview of a text colour (no commit); switching colours re-previews cleanly
+function previewFore(b, c){
+  const content = blockEls.get(b.id).firstChild;
+  content.innerHTML = foreSnap.html;        // reset, so switching colours doesn't stack
+  if (foreIsSelection){
+    foreEnsureEditing(b);
+    restoreSel(content, foreSnap.off);
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand('foreColor', false, c);
+  } else {
+    clearInlineColors(content);             // no selection → recolour the WHOLE text + marker
+    b.color = c; syncBlockEl(b);
+  }
+}
+// live preview of a highlight on the selection (no commit); resets from the clean
+// snapshot each time so switching colours (and the marker toggle) stays consistent
+function previewHilite(b, c){
+  const content = blockEls.get(b.id).firstChild;
+  content.innerHTML = foreSnap.html;        // reset
+  foreEnsureEditing(b);
+  restoreSel(content, foreSnap.off);
+  applyHighlight(b, c);
+}
+// keep the current preview and record one undo step
+function commitFore(b){
+  const content = blockEls.get(b.id).firstChild;
+  if (content.innerHTML !== b.html) b.html = content.innerHTML;
+  commit();
+}
+colorPop.addEventListener('pointerdown', e => e.preventDefault()); // keep block + text selection alive
+colorPop.addEventListener('click', e => {
+  const sw = e.target.closest('.cp-swatch');
+  if (!sw) return;
+  // default-style modes (no block): set the default for new text, then close
+  if (cpMode === 'defFore'){ setDefaultColor(sw.dataset.c === 'none' ? null : sw.dataset.c); closeColorPop(true); return; }
+  if (cpMode === 'defHilite'){ setDefaultHighlight(sw.dataset.c === 'none' ? null : sw.dataset.c); closeColorPop(true); return; }
+  if (!colorPopBlock) return;
+  const b = colorPopBlock, c = sw.dataset.c, cl = c.toLowerCase();
+  if (cpMode === 'fore'){
+    if (cpPreviewC === cl){          // second click on the same colour → confirm
+      commitFore(b);
+      closeColorPop(true);
+      if (!foreIsSelection) buildBlockBar(b);
+      return;
+    }
+    cpPreviewC = cl; cpDidPreview = true;   // first click → preview live, keep popup open
+    previewFore(b, c);
+    colorPop.querySelectorAll('.cp-swatch').forEach(s => s.classList.toggle('picked', s === sw));
+    return;
+  }
+  if (cpMode === 'hilite'){
+    // same click / second-click flow as text colour, on the selection's highlight.
+    // the "None" swatch removes the highlight instead of applying one.
+    const isNone = sw.dataset.c === 'none';
+    const key = isNone ? 'none' : cl;
+    if (cpPreviewC === key){          // second click on the same choice → confirm
+      commitFore(b);
+      closeColorPop(true);
+      return;
+    }
+    cpPreviewC = key; cpDidPreview = true;   // first click → preview live, keep popup open
+    previewHilite(b, isNone ? 'transparent' : c);
+    colorPop.querySelectorAll('.cp-swatch').forEach(s => s.classList.toggle('picked', s === sw));
+    return;
+  }
+  if (cpPreviewC === cl){
+    // confirming the currently-previewed/already-chosen colour → use it (one click if unchanged)
+    if ((b.bg || '').toLowerCase() !== (cpOrigBg || '').toLowerCase()){
+      b.bg = c; b.color = autoTextColor(c);
+      syncBlockEl(b); commit();          // only record an undo step for a real change
+    }
+    closeColorPop(true);
+    buildBlockBar(b);
+  } else {
+    // first click on a new colour → preview it live (no commit, popup stays open)
+    cpPreviewC = cl; cpDidPreview = true;
+    b.bg = c; b.color = autoTextColor(c);
+    syncBlockEl(b);
+    colorPop.querySelectorAll('.cp-swatch').forEach(s => s.classList.toggle('picked', s === sw));
+  }
+});
+document.addEventListener('pointerdown', e => {
+  if (colorPop.classList.contains('show') && !colorPop.contains(e.target)
+      && !e.target.closest('#bbCustomBg') && !e.target.closest('#bbHilite')
+      && !e.target.closest('#spColor') && !e.target.closest('#spHilite') && !e.target.closest('#fpColor') && !e.target.closest('#skColor')
+      && !e.target.closest('#tbColor') && !e.target.closest('#tbHilite'))
+    closeColorPop();
+});
 
 /* ============================================================
    Undo / redo
    ============================================================ */
-function serializeBlocks(){ return JSON.stringify(doc.blocks); }
+function serializeBlocks(){ return JSON.stringify({ blocks: doc.blocks, links: doc.links || [] }); }
+function restoreSnapshot(snap){
+  const s = JSON.parse(snap);
+  if (Array.isArray(s)){ doc.blocks = s; doc.links = []; }   // pre-mindmap snapshot shape
+  else { doc.blocks = s.blocks || []; doc.links = s.links || []; }
+}
 function commit(){
   undoStack.push(lastSnapshot);
   if (undoStack.length > 100) undoStack.shift();
@@ -1308,7 +2418,7 @@ function undo(){
   if (editingId) exitEditWithoutCommit();
   redoStack.push(lastSnapshot);
   lastSnapshot = undoStack.pop();
-  doc.blocks = JSON.parse(lastSnapshot);
+  restoreSnapshot(lastSnapshot);
   renderAll(); markDirty(); updateUndoButtons();
 }
 function redo(){
@@ -1316,13 +2426,14 @@ function redo(){
   if (editingId) exitEditWithoutCommit();
   undoStack.push(lastSnapshot);
   lastSnapshot = redoStack.pop();
-  doc.blocks = JSON.parse(lastSnapshot);
+  restoreSnapshot(lastSnapshot);
   renderAll(); markDirty(); updateUndoButtons();
 }
 function exitEditWithoutCommit(){
   const el = blockEls.get(editingId);
   if (el){ el.classList.remove('editing'); el.firstChild.contentEditable = 'false'; }
   editingId = null;
+  hideFmtPop();
 }
 function resetHistory(){
   undoStack.length = 0; redoStack.length = 0;
@@ -1335,7 +2446,54 @@ function updateUndoButtons(){
 }
 $('btnUndo').addEventListener('click', undo);
 $('btnRedo').addEventListener('click', redo);
-$('btnAddText').addEventListener('click', () => addTextBlock());
+/* ---------- Text button dropdown: plain note + A1–A5 paper sizes ----------
+   A-series keep the ISO 216 1:√2 ratio; px = mm × 2 so they sit nicely on the canvas. */
+const PAPER_SIZES = [
+  ['A1', 1188, 1682], ['A2', 840, 1188], ['A3', 594, 840], ['A4', 420, 594], ['A5', 296, 420]
+];
+const textMenu = $('textMenu');
+function hideTextMenu(){ textMenu.classList.remove('show'); }
+/* a paper is a normal text block (full toolbar incl. colours) with a fixed A-size,
+   a corner label and a typing limit — like one page in a Word document */
+function addPaperBlock(name, w, h){
+  const c = viewportCenterWorld();
+  const bg = defaultPaper();
+  const b = { id: uid(), type: 'text', paper: name,
+              x: Math.round(c.x - w / 2), y: Math.round(c.y - h / 2), w, h,
+              html: '', bg, color: defaultColor || autoTextColor(bg), fontSize: defaultFontSize, z: maxZ() + 1 };
+  doc.blocks.push(b);
+  world.appendChild(createBlockEl(b));
+  commit();
+  updateEmptyHint();
+  selectBlock(b.id);
+  enterEdit(b.id);          // start writing at the top, like opening a new Word page
+  return b;
+}
+function showTextMenu(){
+  let html = `<button data-size="note">Text note<span class="tm-dim">260×140</span></button><div class="tm-sep"></div>`;
+  for (const [name, w, h] of PAPER_SIZES)
+    html += `<button data-size="${name}">${name} paper<span class="tm-dim">${w}×${h}</span></button>`;
+  textMenu.innerHTML = html;
+  textMenu.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+    const s = btn.dataset.size;
+    hideTextMenu();
+    if (s === 'note'){ addTextBlock(); return; }
+    const p = PAPER_SIZES.find(x => x[0] === s);
+    if (p) addPaperBlock(p[0], p[1], p[2]);
+  }));
+  const r = $('btnAddText').getBoundingClientRect();
+  textMenu.classList.add('show');
+  textMenu.style.left = clamp(r.left, 8, window.innerWidth - textMenu.offsetWidth - 8) + 'px';
+  textMenu.style.top = (r.bottom + 6) + 'px';
+}
+$('btnAddText').addEventListener('click', e => {
+  e.stopPropagation();
+  textMenu.classList.contains('show') ? hideTextMenu() : showTextMenu();
+});
+document.addEventListener('pointerdown', e => {
+  if (textMenu.classList.contains('show') && !textMenu.contains(e.target) && !e.target.closest('#btnAddText'))
+    hideTextMenu();
+});
 
 /* ============================================================
    Keyboard shortcuts
@@ -1350,6 +2508,7 @@ window.addEventListener('keydown', e => {
 
   if (e.key === 'Escape'){
     if ($('quizModal').classList.contains('show')) return;
+    if (colorPop.classList.contains('show')){ closeColorPop(); return; }
     if (editingId){ exitEdit(editingId); return; }
     hideSelPop();
     deselect();
@@ -1360,6 +2519,15 @@ window.addEventListener('keydown', e => {
   if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); undo(); return; }
   if (ctrl && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))){ e.preventDefault(); redo(); return; }
   if (ctrl && e.key.toLowerCase() === 'd' && selectedId){ e.preventDefault(); duplicateBlock(selectedId); return; }
+
+  if (selectedLinkId && (e.key === 'Delete' || e.key === 'Backspace')){
+    e.preventDefault();
+    doc.links = doc.links.filter(l => l.id !== selectedLinkId);
+    selectedLinkId = null;
+    commit();
+    renderLinks();
+    return;
+  }
 
   if (selectedId){
     if (e.key === 'Delete' || e.key === 'Backspace'){ e.preventDefault(); deleteBlock(selectedId); return; }
@@ -1441,10 +2609,77 @@ wrap.addEventListener('drop', async e => {
 });
 
 /* ============================================================
-   Files: .study open / save (File System Access API + fallback)
+   Session store (IndexedDB) + home screen + .study import/export
    ============================================================ */
 const hasFS = 'showOpenFilePicker' in window;
-const PICKER_TYPES = [{ description: 'Study Canvas session', accept: { 'application/json': ['.study'] } }];
+const PICKER_TYPES = [{ description: 'Studyboard v1 session', accept: { 'application/json': ['.study'] } }];
+
+let db = null;
+function dbInit(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('study-canvas', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('sessions', { keyPath: 'id' });
+    r.onsuccess = () => { db = r.result; res(); };
+    r.onerror = () => rej(r.error || new Error('IndexedDB blocked'));
+  });
+}
+function dbPut(rec){
+  return new Promise((res, rej) => {
+    const t = db.transaction('sessions', 'readwrite');
+    t.objectStore('sessions').put(rec);
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+  });
+}
+function dbGet(id){
+  return new Promise((res, rej) => {
+    const q = db.transaction('sessions').objectStore('sessions').get(id);
+    q.onsuccess = () => res(q.result);
+    q.onerror = () => rej(q.error);
+  });
+}
+function dbAll(){
+  return new Promise((res, rej) => {
+    const q = db.transaction('sessions').objectStore('sessions').getAll();
+    q.onsuccess = () => res(q.result || []);
+    q.onerror = () => rej(q.error);
+  });
+}
+function dbDelete(id){
+  return new Promise((res, rej) => {
+    const t = db.transaction('sessions', 'readwrite');
+    t.objectStore('sessions').delete(id);
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+  });
+}
+
+/* ---------- auto-save into the session store ---------- */
+let currentSessionId = null, savePending = false, saveT = null;
+function scheduleDbSave(){
+  if (!currentSessionId) return;
+  savePending = true;
+  setSaveState('saving');
+  clearTimeout(saveT);
+  saveT = setTimeout(flushSave, 700);
+}
+async function flushSave(){
+  if (!currentSessionId || !savePending) return;
+  savePending = false;
+  clearTimeout(saveT);
+  try {
+    const rec = (await dbGet(currentSessionId)) || { id: currentSessionId, createdAt: Date.now() };
+    rec.title = $('docTitle').value.trim() || 'Untitled session';
+    rec.updatedAt = Date.now();
+    rec.doc = currentDocData();
+    await dbPut(rec);
+    setSaveState('saved');
+  } catch (err){
+    savePending = true;
+    setSaveState('');
+    toast('Auto-save failed: ' + err.message, 'err');
+  }
+}
 
 function currentDocData(){
   doc.title = $('docTitle').value.trim() || 'Untitled session';
@@ -1453,83 +2688,256 @@ function currentDocData(){
 }
 function serializeDoc(){ return JSON.stringify(currentDocData()); }
 
-async function confirmIfDirty(what){
-  if (!dirty) return true;
-  return showConfirm('Unsaved changes', `You have unsaved changes that will be lost if you ${what}. Continue anyway?`, 'Discard & continue');
-}
-
-async function newDoc(){
-  if (!(await confirmIfDirty('start a new file'))) return;
-  doc = newDocData();
-  fileHandle = null; fileName = null;
-  view = { x: 0, y: 0, zoom: 1 };
-  $('docTitle').value = doc.title;
-  renderAll(); applyView(); resetHistory(); markClean(); renderChat();
-  clearAutosave();
-}
-
-function loadDocFromText(text, handle, name){
-  let d;
-  try { d = JSON.parse(text); } catch { toast('That file is not a valid .study file', 'err'); return false; }
-  if (!d || d.app !== 'study-canvas' || !Array.isArray(d.blocks)){
-    toast('That file is not a Study Canvas session', 'err'); return false;
-  }
+/* ---------- open / create / delete sessions ---------- */
+function loadDocData(d){
   doc = Object.assign(newDocData(), d);
   doc.canvas = Object.assign({ background: 'dots' }, d.canvas);
-  doc.chat = Array.isArray(d.chat) ? d.chat : [];
-  fileHandle = handle || null;
-  fileName = name || null;
+  doc.links = Array.isArray(d.links) ? d.links : [];
+  // migrate papers from the brief free-text-box era into Word-style text pages
+  for (const bl of doc.blocks){
+    if (bl.type !== 'paper') continue;
+    bl.type = 'text';
+    bl.paper = bl.paperName || 'A4';
+    const kids = Array.isArray(bl.kids) ? [...bl.kids].sort((a, c) => (a.y - c.y) || (a.x - c.x)) : [];
+    bl.html = bl.html || kids.map(k => `<p style="font-size:${k.fontSize || 16}px">${k.html || ''}</p>`).join('');
+    bl.bg = bl.bg || '#ffffff';
+    bl.color = bl.color || '#1c1f26';
+    bl.fontSize = bl.fontSize || 16;
+    delete bl.kids; delete bl.paperName;
+  }
+  // migrate the old single-chat shape (doc.chat) into the conversation list
+  if (!Array.isArray(d.chats) || !d.chats.length){
+    const c = newChat();
+    c.messages = Array.isArray(d.chat) ? d.chat : [];
+    doc.chats = [c];
+    doc.activeChatId = c.id;
+  }
+  if (!doc.chats.some(c => c.id === doc.activeChatId))
+    doc.activeChatId = doc.chats[doc.chats.length - 1].id;
+  delete doc.chat;
   const v = doc.canvas.view || {};
   view = { x: v.x || 0, y: v.y || 0, zoom: clamp(v.zoom || 1, 0.08, 4) };
   $('docTitle').value = doc.title || 'Untitled session';
-  renderAll(); applyView(); resetHistory(); markClean(); renderChat();
-  clearAutosave();
-  toast(`Opened “${doc.title}”`, 'ok');
-  return true;
+  renderAll(); applyView(); resetHistory(); renderChat();
+  setSaveState('saved');
+}
+async function openSession(id){
+  const rec = await dbGet(id);
+  if (!rec){ toast('Session not found', 'err'); return; }
+  loadDocData(rec.doc || newDocData());
+  currentSessionId = id;
+  showEditor();
+}
+const newId = () => 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+async function createSession(name){
+  const d = newDocData();
+  d.title = (name || '').trim() || 'Untitled session';
+  const id = newId();
+  await dbPut({ id, title: d.title, createdAt: Date.now(), updatedAt: Date.now(), doc: d });
+  await openSession(id);
+}
+async function deleteSession(id, title){
+  if (!(await showConfirm('Delete session', `Delete “${title}” forever? This cannot be undone.`, 'Delete'))) return;
+  await dbDelete(id);
+  renderHome();
+  toast('Session deleted', '', 1600);
 }
 
-async function openDoc(){
-  if (!(await confirmIfDirty('open another file'))) return;
-  if (hasFS){
-    try {
-      const [handle] = await window.showOpenFilePicker({ types: PICKER_TYPES });
-      const file = await handle.getFile();
-      loadDocFromText(await file.text(), handle, file.name);
-    } catch (err){ if (err.name !== 'AbortError') toast('Could not open the file', 'err'); }
-  } else {
-    $('openInput').click();
-  }
+/* ---------- switching between home and editor ---------- */
+function showEditor(){ $('homeView').classList.remove('show'); }
+async function showHome(){
+  await flushSave();
+  currentSessionId = null;
+  deselect(); hideSelPop();
+  $('homeSearch').value = '';
+  resetNewTile();
+  $('homeView').classList.add('show');
+  await renderHome();
 }
-$('openInput').addEventListener('change', async e => {
-  const f = e.target.files[0];
-  if (f) loadDocFromText(await f.text(), null, f.name);
-  e.target.value = '';
+
+/* ---------- home screen rendering ---------- */
+function relTime(ts){
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  if (s < 7 * 86400) return Math.floor(s / 86400) + ' d ago';
+  return new Date(ts).toLocaleDateString();
+}
+async function renderHome(){
+  const list = (await dbAll()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const grid = $('sessionGrid');
+  grid.querySelectorAll('.tile[data-id]').forEach(t => t.remove());
+  $('libEmpty').style.display = list.length ? 'none' : 'block';
+  $('libLabel').style.display = list.length ? 'block' : 'none';
+  const trash = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
+  for (const rec of list){
+    const n = ((rec.doc && rec.doc.blocks) || []).length;
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.tabIndex = 0;
+    tile.dataset.id = rec.id;
+    tile.dataset.title = (rec.title || '').toLowerCase();
+    tile.innerHTML = `
+      <div class="fc-del" title="Delete session">${trash}</div>
+      <div class="t-doc"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h6l4 4v12H8z"/><path d="M14 4v4h4"/></svg></div>
+      <div class="fc-title">${escHtml(rec.title || 'Untitled')}</div>
+      <div class="fc-sub">${n} block${n === 1 ? '' : 's'} · ${relTime(rec.updatedAt || rec.createdAt || Date.now())}</div>`;
+    tile.addEventListener('click', e => {
+      if (e.target.closest('.fc-del')){ deleteSession(rec.id, rec.title || 'Untitled'); return; }
+      openSession(rec.id);
+    });
+    tile.addEventListener('keydown', e => { if (e.key === 'Enter') openSession(rec.id); });
+    grid.appendChild(tile);
+  }
+  applySearch();
+}
+
+/* ---------- search: live dropdown suggestions (Google/YouTube style).
+   Typing only builds the dropdown — it never scrolls or steals focus.
+   Scrolling to a session happens only on Enter; clicking a suggestion opens it. ---------- */
+function searchMatches(){
+  const q = $('homeSearch').value.trim().toLowerCase();
+  if (!q) return [];
+  // prefix match: sessions whose name starts with the letters typed, in order
+  return [...document.querySelectorAll('.tile[data-id]')].filter(c => c.dataset.title.startsWith(q));
+}
+function applySearch(){
+  const q = $('homeSearch').value.trim().toLowerCase();
+  const box = $('searchSuggest'), sc = $('searchCount');
+  document.querySelectorAll('.tile.found').forEach(c => c.classList.remove('found'));
+  if (!q){ box.classList.remove('show'); box.innerHTML = ''; sc.classList.remove('show'); return; }
+  const matches = searchMatches();
+  const docIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h6l4 4v12H8z"/><path d="M14 4v4h4"/></svg>';
+  box.innerHTML = matches.length
+    ? matches.map((c, i) =>
+        `<div class="suggest-item${i === 0 ? ' active' : ''}" data-id="${c.dataset.id}">
+          <span class="si-ic">${docIcon}</span>
+          <span class="si-title">${escHtml(c.querySelector('.fc-title').textContent)}</span>
+          <span class="si-sub">${escHtml(c.querySelector('.fc-sub').textContent)}</span>
+        </div>`).join('')
+    : `<div class="suggest-empty">No sessions start with “${escHtml(q)}”</div>`;
+  box.classList.add('show');
+  sc.textContent = matches.length === 1 ? '1 match' : matches.length + ' matches';
+  sc.classList.add('show');
+}
+function scrollToSession(id){
+  const card = document.querySelector('.tile[data-id="' + id + '"]');
+  if (!card) return;
+  document.querySelectorAll('.tile.found').forEach(c => c.classList.remove('found'));
+  card.classList.add('found');
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+$('homeSearch').addEventListener('input', applySearch);
+$('homeSearch').addEventListener('keydown', e => {
+  const box = $('searchSuggest');
+  const items = [...box.querySelectorAll('.suggest-item')];
+  const idx = items.findIndex(it => it.classList.contains('active'));
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && items.length){
+    e.preventDefault();
+    const n = e.key === 'ArrowDown'
+      ? (idx + 1) % items.length
+      : (idx - 1 + items.length) % items.length;
+    items.forEach(it => it.classList.remove('active'));
+    items[n].classList.add('active');
+    items[n].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter'){
+    e.preventDefault();
+    const active = items[idx] || items[0];
+    if (active && active.dataset.id){ box.classList.remove('show'); scrollToSession(active.dataset.id); }
+  } else if (e.key === 'Escape'){
+    box.classList.remove('show');
+  }
+});
+// click a suggestion → scroll down to that session (mousedown fires before blur, so keep focus stable)
+$('searchSuggest').addEventListener('mousedown', e => {
+  const item = e.target.closest('.suggest-item');
+  if (item && item.dataset.id){ e.preventDefault(); $('searchSuggest').classList.remove('show'); scrollToSession(item.dataset.id); }
+});
+// close the dropdown shortly after leaving the search box
+$('homeSearch').addEventListener('blur', () => {
+  setTimeout(() => $('searchSuggest').classList.remove('show'), 150);
 });
 
-async function saveDoc(){
-  if (hasFS && fileHandle){
-    try {
-      const w = await fileHandle.createWritable();
-      await w.write(serializeDoc());
-      await w.close();
-      markClean(); clearAutosave();
-      toast('Saved', 'ok', 1600);
-    } catch (err){
-      if (err.name !== 'AbortError') toast('Save failed: ' + err.message, 'err');
-    }
-  } else {
-    saveDocAs();
-  }
+/* ---------- "New session" tile: click turns the label into a name field, Finder-rename style ---------- */
+function activateNewTile(){
+  if ($('newName')) { $('newName').focus(); return; }
+  const label = $('newTileLabel');
+  const input = document.createElement('input');
+  input.id = 'newName'; input.className = 'tile-input'; input.maxLength = 80;
+  input.placeholder = 'Name…'; input.spellcheck = false; input.autocomplete = 'off';
+  label.replaceWith(input);
+  input.focus();
+  // one-shot commit: Enter + the blur it triggers must not both create a session
+  let handled = false;
+  const commit = () => {
+    if (handled) return;
+    handled = true;
+    if (input.value.trim()) createSession(input.value); else resetNewTile();
+  };
+  input.addEventListener('click', e => e.stopPropagation());
+  input.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter'){ e.preventDefault(); commit(); }
+    else if (e.key === 'Escape'){ handled = true; resetNewTile(); }
+  });
+  input.addEventListener('blur', commit);
 }
-async function saveDocAs(){
+function resetNewTile(){
+  const input = $('newName');
+  if (!input) return;
+  const label = document.createElement('div');
+  label.className = 'fc-title'; label.id = 'newTileLabel'; label.textContent = 'New session +';
+  input.replaceWith(label);
+}
+$('newTile').addEventListener('click', activateNewTile);
+$('newTile').addEventListener('keydown', e => { if (e.key === 'Enter') activateNewTile(); });
+$('btnThemeHome').addEventListener('click', toggleTheme);
+$('btnImport').addEventListener('click', () => $('openInput').click());
+$('openInput').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (f) importStudyText(await f.text());
+  e.target.value = '';
+});
+async function importStudyText(text){
+  let d = null;
+  try { d = JSON.parse(text); } catch {}
+  // a full backup made with Settings → "Export as study files"
+  if (d && d.app === 'study-canvas' && d.type === 'bundle' && Array.isArray(d.sessions)){
+    let n = 0;
+    for (const s of d.sessions){
+      if (!s || !s.doc || !Array.isArray(s.doc.blocks)) continue;
+      await dbPut({ id: newId(), title: s.title || s.doc.title || 'Imported session',
+        createdAt: s.createdAt || Date.now(), updatedAt: Date.now(), doc: s.doc });
+      n++;
+    }
+    if (!n){ toast('That backup contained no sessions', 'err'); return; }
+    await renderHome();
+    toast(`Imported ${n} session${n === 1 ? '' : 's'} from backup`, 'ok');
+    return;
+  }
+  if (!d || d.app !== 'study-canvas' || !Array.isArray(d.blocks)){
+    toast('That file is not a Studyboard v1 session', 'err'); return;
+  }
+  const id = newId();
+  await dbPut({ id, title: d.title || 'Imported session', createdAt: Date.now(), updatedAt: Date.now(), doc: d });
+  await openSession(id);
+  toast(`Imported “${d.title || 'session'}”`, 'ok');
+}
+
+/* ---------- export as a .study file (backup) ---------- */
+async function exportDoc(){
+  if (currentSessionId) await flushSave();
   const suggested = ($('docTitle').value.trim() || 'study-session')
     .replace(/[\\/:*?"<>|]/g, '').slice(0, 60) + '.study';
   if (hasFS){
     try {
-      fileHandle = await window.showSaveFilePicker({ types: PICKER_TYPES, suggestedName: suggested });
-      fileName = fileHandle.name;
-      await saveDoc();
-    } catch (err){ if (err.name !== 'AbortError') toast('Save failed', 'err'); }
+      const handle = await window.showSaveFilePicker({ types: PICKER_TYPES, suggestedName: suggested });
+      const w = await handle.createWritable();
+      await w.write(serializeDoc());
+      await w.close();
+      toast('Exported ' + handle.name, 'ok');
+    } catch (err){ if (err.name !== 'AbortError') toast('Export failed: ' + err.message, 'err'); }
   } else {
     const blob = new Blob([serializeDoc()], { type: 'application/json' });
     const a = document.createElement('a');
@@ -1537,103 +2945,124 @@ async function saveDocAs(){
     a.download = suggested;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    markClean(); clearAutosave();
-    toast('Downloaded ' + suggested, 'ok');
+    toast('Exported to Downloads: ' + suggested, 'ok');
   }
 }
-$('btnNew').addEventListener('click', newDoc);
-$('btnOpen').addEventListener('click', openDoc);
-$('btnSave').addEventListener('click', saveDoc);
-$('btnSaveAs').addEventListener('click', saveDocAs);
+/* keyboard-shortcut wrappers */
+function saveDoc(){
+  if (!currentSessionId) return;
+  savePending = true;
+  flushSave().then(() => toast('Saved', 'ok', 1200));
+}
+function saveDocAs(){ if (currentSessionId) exportDoc(); }
+function openDoc(){ showHome(); }
+function newDoc(){ showHome().then(activateNewTile); }
+
+/* ---------- export every session as one .study backup (Settings) ---------- */
+function downloadText(text, filename){
+  const blob = new Blob([text], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$('btnExportAll').addEventListener('click', async () => {
+  if (currentSessionId) await flushSave();
+  const list = await dbAll();
+  if (!list.length){ toast('There are no sessions to export yet', 'err'); return; }
+  const bundle = {
+    app: 'study-canvas', type: 'bundle', version: 1, exportedAt: Date.now(),
+    sessions: list.map(r => ({ title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt, doc: r.doc }))
+  };
+  downloadText(JSON.stringify(bundle), 'studyboard-backup.study');
+  toast(`Exported ${list.length} session${list.length === 1 ? '' : 's'} to Downloads`, 'ok');
+});
+
+/* ============================================================
+   Taskbar (top bar): right-click → Hide, hover top edge → auto-reveal
+   ============================================================ */
+const tbMenu = $('tbMenu');
+let tbHidden = localStorage.getItem('sc-tb-hide') === '1';
+function applyTbHidden(){
+  document.body.classList.toggle('tb-hidden', tbHidden);
+  if (!tbHidden) document.body.classList.remove('tb-reveal');
+  localStorage.setItem('sc-tb-hide', tbHidden ? '1' : '0');
+}
+function hideTbMenu(){ tbMenu.classList.remove('show'); }
+$('topbar').addEventListener('contextmenu', e => {
+  e.preventDefault();
+  tbMenu.innerHTML = `<button id="tbToggleHide">${tbHidden
+    ? 'Keep taskbar visible (turn off hide)'
+    : 'Hide taskbar'}</button>`;
+  tbMenu.classList.add('show');
+  tbMenu.style.left = clamp(e.clientX, 8, window.innerWidth - tbMenu.offsetWidth - 8) + 'px';
+  tbMenu.style.top  = clamp(e.clientY, 8, window.innerHeight - tbMenu.offsetHeight - 8) + 'px';
+  $('tbToggleHide').addEventListener('click', () => {
+    tbHidden = !tbHidden;
+    applyTbHidden();
+    hideTbMenu();
+    toast(tbHidden
+      ? 'Taskbar hidden — move the mouse to the top of the screen to show it'
+      : 'Taskbar is visible again', '', 3000);
+  });
+});
+document.addEventListener('pointerdown', e => {
+  if (tbMenu.classList.contains('show') && !tbMenu.contains(e.target)) hideTbMenu();
+});
+window.addEventListener('mousemove', e => {
+  if (!tbHidden) return;
+  if (e.clientY <= 6) document.body.classList.add('tb-reveal');
+  else if (e.clientY > 64 && !tbMenu.classList.contains('show')) document.body.classList.remove('tb-reveal');
+});
+applyTbHidden();
+
+$('btnHome').addEventListener('click', showHome);
+$('btnExport').addEventListener('click', exportDoc);
 $('docTitle').addEventListener('input', () => { doc.title = $('docTitle').value; markDirty(); });
 
 window.addEventListener('beforeunload', e => {
-  if (dirty){ e.preventDefault(); e.returnValue = ''; }
+  if (savePending){ flushSave(); e.preventDefault(); e.returnValue = ''; }
 });
-
-/* ---------- crash-safety autosave ---------- */
-const AUTOSAVE_KEY = 'sc-autosave';
-let autosaveT = null, autosaveWarned = false;
-function scheduleAutosave(){
-  clearTimeout(autosaveT);
-  autosaveT = setTimeout(() => {
-    try {
-      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ doc: currentDocData(), fileName, when: Date.now() }));
-    } catch {
-      if (!autosaveWarned){ autosaveWarned = true;
-        toast('Note is too large for crash-recovery backup — remember to save often', 'err', 5000); }
-    }
-  }, 800);
-}
-function clearAutosave(){
-  clearTimeout(autosaveT);
-  localStorage.removeItem(AUTOSAVE_KEY);
-}
-function checkAutosave(){
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)); } catch {}
-  if (!saved || !saved.doc || !Array.isArray(saved.doc.blocks) || !saved.doc.blocks.length) return;
-  $('restoreBar').classList.add('show');
-  $('btnRestore').onclick = () => {
-    $('restoreBar').classList.remove('show');
-    loadDocFromText(JSON.stringify(saved.doc), null, saved.fileName);
-    markDirty();
-    toast('Session restored — save it to a file to keep it', 'ok', 4200);
-  };
-  $('btnDismissRestore').onclick = () => {
-    $('restoreBar').classList.remove('show');
-    clearAutosave();
-  };
-}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSave();
+});
 /* ============================================================
    AI: settings & DeepSeek client
    ============================================================ */
-const apiKey = () => localStorage.getItem('sc-apikey') || '';
+const apiKey = () => 'sk-15472450bc5c43088421305c5ef87efb';
 const aiModel = () => localStorage.getItem('sc-model') || 'deepseek-chat';
 const transLang = () => localStorage.getItem('sc-lang') || 'Swedish';
 const API_URL = 'https://api.deepseek.com/chat/completions';
 
 $('btnSettings').addEventListener('click', openSettings);
 function openSettings(){
-  $('setKey').value = apiKey();
   $('setModel').value = aiModel();
   $('setLang').value = transLang();
   $('testResult').className = '';
   openModal('settingsModal');
 }
-$('btnShowKey').addEventListener('click', () => {
-  const k = $('setKey');
-  k.type = k.type === 'password' ? 'text' : 'password';
-});
 $('btnSaveSettings').addEventListener('click', () => {
-  localStorage.setItem('sc-apikey', $('setKey').value.trim());
   localStorage.setItem('sc-model', $('setModel').value);
   localStorage.setItem('sc-lang', $('setLang').value);
   closeModal('settingsModal');
   toast('Settings saved', 'ok', 1600);
 });
 $('btnTestKey').addEventListener('click', async () => {
-  const key = $('setKey').value.trim();
   const res = $('testResult');
-  if (!key){ res.className = 'err'; res.textContent = 'Enter a key first'; return; }
   res.className = ''; res.style.display = 'inline'; res.textContent = 'Testing…';
   try {
     const r = await fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey() },
       body: JSON.stringify({ model: 'deepseek-chat', max_tokens: 4,
         messages: [{ role: 'user', content: 'hi' }] })
     });
-    if (r.ok){ res.className = 'ok'; res.textContent = '✓ Connection works!'; }
-    else { res.className = 'err'; res.textContent = '✗ ' + (r.status === 401 ? 'Invalid API key' : 'Error ' + r.status); }
+    if (r.ok){ res.className = 'ok'; res.textContent = '✓ AI connection works!'; }
+    else { res.className = 'err'; res.textContent = '✗ ' + (r.status === 401 ? 'API key rejected' : r.status === 402 ? 'No DeepSeek balance' : 'Error ' + r.status); }
   } catch { res.className = 'err'; res.textContent = '✗ Network error (check your internet)'; }
 });
-function requireKey(){
-  if (apiKey()) return true;
-  toast('Add your DeepSeek API key in Settings first', 'err');
-  openSettings();
-  return false;
-}
+function requireKey(){ return true; }
 
 async function apiError(res){
   let msg = 'Error ' + res.status;
@@ -1689,26 +3118,42 @@ async function deepseekJSON(messages){
 }
 
 /* the note as AI context */
+// If the student has a single text page/note selected (or is editing one), the AI
+// works on THAT note only. Otherwise it sees the whole board.
+function focusedTextBlock(){
+  const id = editingId || selectedId;
+  const b = id && getBlock(id);
+  return (b && b.type === 'text') ? b : null;
+}
 function noteContext(){
+  const focus = focusedTextBlock();
   const tmp = document.createElement('div');
   const parts = [];
-  for (const b of [...doc.blocks].sort((a, c) => (a.y - c.y) || (a.x - c.x))){
+  const blocks = focus ? [focus] : [...doc.blocks].sort((a, c) => (a.y - c.y) || (a.x - c.x));
+  for (const b of blocks){
     if (b.type !== 'text') continue;
     tmp.innerHTML = b.html || '';
     const t = tmp.innerText.trim();
     if (t) parts.push(t);
   }
+  if (focus) return parts.join('\n').slice(0, 9000);
   const imgs = doc.blocks.filter(b => b.type === 'image').length;
   let s = parts.join('\n— — —\n');
   if (imgs) s += `\n\n[The note also contains ${imgs} picture${imgs > 1 ? 's' : ''}.]`;
   return s.slice(0, 9000);
 }
 function systemPrompt(withContext){
-  let s = 'You are a friendly study assistant inside a note-taking app called Study Canvas. ' +
+  let s = 'You are a friendly study assistant inside a note-taking app called Studyboard v1. ' +
           'The user is a student. Be clear, helpful and reasonably brief; use Markdown formatting.';
   if (withContext){
     const ctx = noteContext();
-    if (ctx) s += '\n\nThe student\'s current note (their study material):\n"""\n' + ctx + '\n"""';
+    if (ctx){
+      if (focusedTextBlock())
+        s += '\n\nThe student has selected ONE specific note. Work only on this note — ' +
+             'summarize, explain or answer using just this text, not any other notes:\n"""\n' + ctx + '\n"""';
+      else
+        s += '\n\nThe student\'s current note (their study material):\n"""\n' + ctx + '\n"""';
+    }
   }
   return s;
 }
@@ -1766,12 +3211,140 @@ function setSidebar(open){
 $('btnSidebar').addEventListener('click', () => setSidebar($('sidebar').classList.contains('collapsed')));
 $('btnCloseSidebar').addEventListener('click', () => setSidebar(false));
 
+/* ---------- user-resizable panel width (drag the left edge) ---------- */
+(function initSidebarResize(){
+  const handle = $('sbResize');
+  const applyW = w => {
+    w = clamp(Math.round(w), 280, 640);
+    document.documentElement.style.setProperty('--sb-w', w + 'px');
+    localStorage.setItem('sc-sbw', w);
+  };
+  applyW(+localStorage.getItem('sc-sbw') || 360);
+  let drag = null;
+  handle.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    drag = { x: e.clientX, w: $('sidebar').offsetWidth };
+    $('sidebar').classList.add('resizing');
+    handle.classList.add('active');
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener('pointermove', e => {
+    if (!drag) return;
+    applyW(drag.w + (drag.x - e.clientX));
+    positionBlockBar();
+  });
+  const stop = () => {
+    if (!drag) return;
+    drag = null;
+    $('sidebar').classList.remove('resizing');
+    handle.classList.remove('active');
+  };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+})();
+
+/* ---------- "Read note as context" skill card ---------- */
+$('skillHead').addEventListener('click', e => {
+  if (e.target.closest('#ctxSwitch')) return;         // the on/off switch is not the expander
+  $('skillCard').classList.toggle('open');
+});
+$('skExplain').addEventListener('click', () =>
+  sendChat(focusedTextBlock() ? 'Explain the key ideas in this note in simple terms.'
+                              : 'Explain the key ideas in my notes in simple terms.'));
+$('skSummarize').addEventListener('click', () =>
+  sendChat(focusedTextBlock() ? 'Summarize this note briefly with the key points.'
+                              : 'Summarize my notes briefly with the key points.'));
+$('skTranslate').addEventListener('click', () =>
+  sendChat(focusedTextBlock() ? `Translate this note to ${transLang()}.`
+                              : `Translate my notes to ${transLang()}.`));
+$('skAsk').addEventListener('click', () => {
+  setSidebar(true);
+  chatInput.focus();
+});
+// "Ask about all notes" — drop the single-note focus without touching the canvas otherwise
+$('focusChipClear').addEventListener('click', () => { deselect(); chatInput.focus(); });
+$('skColor').addEventListener('click', () => {
+  const b = selectedId && getBlock(selectedId);
+  if (!b || b.type !== 'text'){ toast('Select a text block on the canvas first', 'err'); return; }
+  openForeColor($('skColor'), b);
+});
+$('skSmaller').addEventListener('click', () => {
+  const b = selectedId && getBlock(selectedId);
+  if (!b || b.type !== 'text'){ toast('Select a text block on the canvas first', 'err'); return; }
+  b.fontSize = clamp((b.fontSize || 16) - 2, 10, 60);
+  syncBlockEl(b); commit();
+});
+
 function chatEmptyEl(){
   return $('chatEmpty');
 }
+/* ---------- conversations: several chats per session, with a history list ---------- */
+function activeChat(){
+  let c = doc.chats.find(x => x.id === doc.activeChatId);
+  if (!c){ c = doc.chats[doc.chats.length - 1]; doc.activeChatId = c.id; }
+  return c;
+}
+function chatTitle(c){
+  if (c.title) return c.title;
+  const m = c.messages.find(x => x.role === 'user');
+  return m ? m.content.slice(0, 48) : 'New conversation';
+}
+function renderChatHistory(){
+  const p = $('chatHistory');
+  const list = [...doc.chats].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  p.innerHTML = '<div class="ch-label">Previous chats</div>';
+  for (const c of list){
+    const it = document.createElement('div');
+    it.className = 'ch-item' + (c.id === doc.activeChatId ? ' active' : '');
+    it.innerHTML = `
+      <div class="ch-main">
+        <div class="ch-title">${escHtml(chatTitle(c))}</div>
+        <div class="ch-sub">${c.messages.length} message${c.messages.length === 1 ? '' : 's'} · ${relTime(c.updatedAt || c.createdAt || Date.now())}</div>
+        <div class="ch-session">— ${escHtml(doc.title || 'Untitled session')}</div>
+      </div>
+      <button class="ch-del" title="Delete conversation">×</button>`;
+    it.addEventListener('click', e => {
+      if (e.target.closest('.ch-del')){
+        doc.chats = doc.chats.filter(x => x.id !== c.id);
+        if (!doc.chats.length) doc.chats.push(newChat());
+        if (doc.activeChatId === c.id){
+          doc.activeChatId = doc.chats[doc.chats.length - 1].id;
+          renderChat();
+        }
+        markDirty();
+        renderChatHistory();
+        return;
+      }
+      doc.activeChatId = c.id;
+      markDirty();
+      p.classList.remove('show');
+      renderChat();
+    });
+    p.appendChild(it);
+  }
+}
+$('btnHistory').addEventListener('click', () => {
+  const p = $('chatHistory');
+  if (p.classList.contains('show')){ p.classList.remove('show'); return; }
+  renderChatHistory();
+  p.classList.add('show');
+});
+$('btnNewChat').addEventListener('click', () => {
+  $('chatHistory').classList.remove('show');
+  if (activeChat().messages.length){
+    const c = newChat();
+    doc.chats.push(c);
+    doc.activeChatId = c.id;
+    markDirty();
+    renderChat();
+  }
+  chatInput.focus();
+});
 function renderChat(){
+  $('chatHistory').classList.remove('show');
   chatLog.querySelectorAll('.msg').forEach(m => m.remove());
-  for (const m of doc.chat) appendMsg(m.role, m.content, false);
+  for (const m of activeChat().messages) appendMsg(m.role, m.content, false);
   updateChatEmpty();
   chatLog.scrollTop = chatLog.scrollHeight;
 }
@@ -1793,6 +3366,36 @@ function appendMsg(role, content, scroll = true){
   if (scroll) chatLog.scrollTop = chatLog.scrollHeight;
   return el;
 }
+// Size a text block to fit its content (used when inserting an AI answer): width grows
+// to the text up to a readable max, height fits so nothing is clipped.
+function fitBlockToContent(b, opt){
+  opt = opt || {};
+  const minW = opt.minW || 150, maxW = opt.maxW || 1600, minH = opt.minH || 72;
+  const aspect = opt.aspect || 1;            // target height/width — 1 = square
+  const el = blockEls.get(b.id);
+  if (!el) return;
+  const c = el.firstChild;
+  const savedW = el.style.width, savedH = el.style.height, savedMax = el.style.maxWidth;
+  el.style.maxWidth = maxW + 'px';
+  el.style.height = 'auto';
+  const heightAt = wt => { el.style.width = wt + 'px'; return Math.ceil(c.scrollHeight); };
+  // binary-search the width where the fitted height ≈ aspect·width (height shrinks as width
+  // grows, so this converges). If even at maxW it's still taller, just use maxW.
+  let w, h;
+  if (heightAt(maxW) > aspect * maxW){ w = maxW; h = heightAt(maxW); }
+  else {
+    let lo = minW, hi = maxW;
+    for (let i = 0; i < 12; i++){
+      const mid = Math.round((lo + hi) / 2);
+      if (heightAt(mid) > aspect * mid) lo = mid; else hi = mid;
+    }
+    w = clamp(hi, minW, maxW); h = heightAt(w);
+  }
+  h = Math.max(minH, h);
+  el.style.width = savedW; el.style.height = savedH; el.style.maxWidth = savedMax;
+  b.w = w; b.h = h;
+  syncBlockEl(b); commit();
+}
 function addMsgActions(el, getText){
   const row = document.createElement('div');
   row.className = 'actions';
@@ -1801,7 +3404,7 @@ function addMsgActions(el, getText){
   ins.addEventListener('click', () => {
     const c = viewportCenterWorld();
     const b = addTextBlock(c.x - 160, c.y - 100, mdToHtml(getText()));
-    b.w = 320; b.h = 220; syncBlockEl(b); commit();
+    fitBlockToContent(b);           // size the note to the text, not a fixed box
     toast('Added to your note', 'ok', 1600);
   });
   const cp = document.createElement('button');
@@ -1826,9 +3429,10 @@ sendBtn.addEventListener('click', () => {
   sendChat();
 });
 $('btnClearChat').addEventListener('click', async () => {
-  if (!doc.chat.length) return;
-  if (await showConfirm('Clear conversation', 'Delete the whole chat history of this session?', 'Clear')){
-    doc.chat = []; renderChat(); markDirty();
+  const c = activeChat();
+  if (!c.messages.length) return;
+  if (await showConfirm('Clear conversation', 'Delete all messages in this conversation?', 'Clear')){
+    c.messages = []; c.title = ''; renderChat(); markDirty();
   }
 });
 
@@ -1848,13 +3452,16 @@ async function sendChat(presetText){
   if (presetText === undefined){ chatInput.value = ''; chatInput.style.height = 'auto'; }
   setSidebar(true);
 
-  doc.chat.push({ role: 'user', content: text });
+  const chat = activeChat();
+  chat.messages.push({ role: 'user', content: text });
+  if (!chat.title) chat.title = text.slice(0, 48);
+  chat.updatedAt = Date.now();
   appendMsg('user', text);
   markDirty();
 
   const messages = [
     { role: 'system', content: systemPrompt($('ctxToggle').checked) },
-    ...doc.chat.slice(-20).map(m => ({ role: m.role, content: m.content }))
+    ...chat.messages.slice(-20).map(m => ({ role: m.role, content: m.content }))
   ];
 
   const el = document.createElement('div');
@@ -1882,7 +3489,8 @@ async function sendChat(presetText){
     bubble.innerHTML = mdToHtml(full || '(empty answer)');
     el.classList.remove('streaming');
     addMsgActions(el, () => full);
-    doc.chat.push({ role: 'assistant', content: full });
+    chat.messages.push({ role: 'assistant', content: full });
+    chat.updatedAt = Date.now();
     markDirty();
   } catch (err){
     el.classList.remove('streaming');
@@ -1904,28 +3512,24 @@ async function sendChat(presetText){
    ============================================================ */
 const selPop = $('selPop');
 let selPopText = '';
-selPop.addEventListener('pointerdown', e => e.preventDefault());
+selPop.addEventListener('pointerdown', e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); });
 
+// While the user is still dragging to mark text, DON'T pop up the AI/format menu —
+// wait until they release the mouse (finish marking). Keyboard selection still uses
+// the short debounce.
+let markingText = false;
+document.addEventListener('pointerdown', e => {
+  if (e.target.closest && e.target.closest('.text-block .content')) markingText = true;
+}, true);
+document.addEventListener('pointerup', () => {
+  if (!markingText) return;
+  markingText = false;
+  clearTimeout(window._selT);
+  window._selT = setTimeout(updateEditorToolbars, 0);   // now that marking is done, show it
+});
 document.addEventListener('selectionchange', () => {
   clearTimeout(window._selT);
-  window._selT = setTimeout(() => {
-    const sel = document.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount){ hideSelPop(); return; }
-    const node = sel.anchorNode && (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
-    if (!node || !node.closest || !node.closest('.text-block .content')){ hideSelPop(); return; }
-    const text = sel.toString().trim();
-    if (text.length < 2){ hideSelPop(); return; }
-    selPopText = text;
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    const wr = wrap.getBoundingClientRect();
-    selPop.classList.add('show');
-    const pw = selPop.offsetWidth, ph = selPop.offsetHeight;
-    let left = clamp(rect.left - wr.left + rect.width / 2 - pw / 2, 8, wr.width - pw - 8);
-    let top = rect.top - wr.top - ph - 10;
-    if (top < 8) top = rect.bottom - wr.top + 10;
-    selPop.style.left = left + 'px';
-    selPop.style.top = top + 'px';
-  }, 180);
+  window._selT = setTimeout(() => { if (!markingText) updateEditorToolbars(); }, 180);
 });
 function hideSelPop(){ selPop.classList.remove('show'); }
 
@@ -1943,6 +3547,262 @@ $('spAsk').addEventListener('click', () => {
   chatInput.selectionStart = chatInput.selectionEnd = chatInput.value.length;
   hideSelPop();
 });
+
+/* formatting actions on the selection menu */
+function selectionBlock(){
+  const sel = document.getSelection();
+  const n = sel && sel.anchorNode &&
+    (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
+  const be = n && n.closest && n.closest('.block');
+  return be ? getBlock(be.dataset.id) : null;
+}
+$('spColor').addEventListener('click', () => {
+  const b = selectionBlock();
+  if (b) openForeColor($('spColor'), b);
+});
+$('spHilite').addEventListener('click', () => {
+  const b = selectionBlock();
+  if (!b) return;
+  const openHere = colorPop.classList.contains('show') && cpMode === 'hilite';
+  closeColorPop();
+  if (!openHere) openColorPop($('spHilite'), b, 'hilite');
+});
+// remove every per-word inline size so the block's base size governs all of it
+function clearInlineFontSizes(node){
+  if (!node) return;
+  node.querySelectorAll('[style*="font-size"]').forEach(el => {
+    el.style.fontSize = '';
+    if (!el.getAttribute('style')) el.removeAttribute('style');
+  });
+  node.querySelectorAll('font[size]').forEach(f => f.removeAttribute('size'));
+}
+function setBlockFont(b, v){
+  if (!b) return;
+  b.fontSize = clamp(Math.round(v) || 16, 6, 400);
+  // a WHOLE-block size change makes the whole text one size: drop any per-word sizes
+  const el = blockEls.get(b.id);
+  const content = el && el.firstChild;
+  if (content){
+    clearInlineFontSizes(content);
+    b.html = content.innerHTML;
+  } else if (b.html){
+    const tmp = document.createElement('div');
+    tmp.innerHTML = b.html;
+    clearInlineFontSizes(tmp);
+    b.html = tmp.innerHTML;
+  }
+  syncBlockEl(b); commit();
+  const si = $('spFontVal'), fi = $('fpFontVal');
+  if (si && document.activeElement !== si) si.value = b.fontSize;
+  if (fi && document.activeElement !== fi) fi.value = b.fontSize;
+}
+/* the current non-collapsed text selection inside a note (cloned range), or null */
+function currentNoteRange(){
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+  const n = sel.anchorNode && (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
+  if (!n || !n.closest || !n.closest('.text-block .content')) return null;
+  return sel.getRangeAt(0).cloneRange();
+}
+/* the font size actually shown at the start of a range (so A−/A+ step from what you see) */
+function rangeFontPx(range, b){
+  try {
+    let n = range.startContainer;
+    if (n.nodeType !== 3)   // element container: step into the child the range starts at
+      n = n.childNodes[range.startOffset] || n.childNodes[range.startOffset - 1] || n;
+    const el = n.nodeType === 3 ? n.parentElement : n;
+    return Math.round(parseFloat(getComputedStyle(el).fontSize)) || (b.fontSize || 16);
+  } catch (e){ return b.fontSize || 16; }
+}
+/* Font size that respects a highlighted selection: if a range is given, only that
+   text is resized (wrapped in a sized span); otherwise the whole block changes. */
+function applyFontSize(b, px, range){
+  if (!b) return;
+  px = clamp(Math.round(px) || 16, 6, 400);
+  const el = blockEls.get(b.id);
+  const content = el && el.firstChild;
+  if (!range || !content){ setBlockFont(b, px); return; }
+  // make the block editable without losing the user's highlight
+  if (editingId !== b.id){
+    if (editingId) exitEdit(editingId);
+    selectBlock(b.id);
+    editingId = b.id;
+    el.classList.add('editing');
+    content.contentEditable = 'true';
+    content.focus();
+  }
+  const sel = document.getSelection();
+  sel.removeAllRanges(); sel.addRange(range);
+  // mark the selection with a sentinel size, then convert those tags to px spans
+  document.execCommand('styleWithCSS', false, false);
+  document.execCommand('fontSize', false, '7');
+  const spans = [];
+  content.querySelectorAll('font[size="7"], [style*="xxx-large"]').forEach(f => {
+    const span = document.createElement('span');
+    span.style.fontSize = px + 'px';
+    while (f.firstChild) span.appendChild(f.firstChild);
+    // a nested span must not keep its own size, or repeated A−/A+ would stack
+    span.querySelectorAll('span[style*="font-size"]').forEach(s => { s.style.fontSize = ''; if (!s.getAttribute('style')) s.removeAttribute('style'); });
+    f.replaceWith(span);
+    spans.push(span);
+  });
+  // KEEP the text highlighted on the new spans so the menu stays open and you can
+  // press A−/A+ again (replaceWith above had dropped the old selection).
+  if (spans.length){
+    const nr = document.createRange();
+    nr.setStartBefore(spans[0]);
+    nr.setEndAfter(spans[spans.length - 1]);
+    sel.removeAllRanges(); sel.addRange(nr);
+    spSavedRange = nr.cloneRange();
+  }
+  if (content.innerHTML !== b.html){ b.html = content.innerHTML; commit(); }
+  updateEditorToolbars();
+}
+$('spSmaller').addEventListener('click', () => { const b = selectionBlock(); if (!b) return; const rg = currentNoteRange(); applyFontSize(b, rangeFontPx(rg, b) - 2, rg); });
+$('spBigger').addEventListener('click', () => { const b = selectionBlock(); if (!b) return; const rg = currentNoteRange(); applyFontSize(b, rangeFontPx(rg, b) + 2, rg); });
+/* typed font size on the selection menu: remember the block + selection before the
+   field steals focus, apply on Enter/change, then put the selection back */
+let spFontTarget = null, spSavedRange = null;
+$('spFontVal').addEventListener('pointerdown', () => {
+  spFontTarget = selectionBlock();
+  const sel = document.getSelection();
+  spSavedRange = sel && sel.rangeCount && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null;
+});
+function spApplyFont(v){
+  // resize only the highlighted text (spSavedRange), not the whole block
+  applyFontSize(spFontTarget, v, spSavedRange);
+}
+$('spFontVal').addEventListener('change', e => spApplyFont(+e.target.value));
+$('spFontVal').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter'){ e.preventDefault(); spApplyFont(+e.target.value); e.target.blur(); }
+});
+/* Bold/Italic/Underline on the current selection: make the block editable while KEEPING
+   the selected range (so the command applies to that text, not a collapsed caret). */
+function applyInlineFormat(b, cmd){
+  const el = blockEls.get(b.id);
+  if (!el) return;
+  const sel = document.getSelection();
+  const range = sel && sel.rangeCount && !sel.isCollapsed && el.contains(sel.anchorNode)
+    ? sel.getRangeAt(0).cloneRange() : null;
+  const content = el.firstChild;
+  if (editingId !== b.id){
+    if (editingId) exitEdit(editingId);
+    selectBlock(b.id);
+    editingId = b.id;
+    el.classList.add('editing');
+    content.contentEditable = 'true';
+    content.focus();
+  }
+  if (range){ sel.removeAllRanges(); sel.addRange(range); }
+  document.execCommand(cmd, false);
+  updateEditorToolbars();
+}
+$('spBold').addEventListener('click', () => { const b = selectionBlock(); if (b) applyInlineFormat(b, 'bold'); });
+$('spItalic').addEventListener('click', () => { const b = selectionBlock(); if (b) applyInlineFormat(b, 'italic'); });
+$('spUnder').addEventListener('click', () => { const b = selectionBlock(); if (b) applyInlineFormat(b, 'underline'); });
+
+/* ============================================================
+   Double-click formatting popover (formatting only, no AI)
+   ============================================================ */
+const fmtPop = $('fmtPop');
+fmtPop.addEventListener('pointerdown', e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); }); // keep the caret/selection alive (but let the font field focus)
+/* place a popover centred above a screen rect, flipping below if there's no room */
+function placeAbove(pop, rect){
+  const wr = wrap.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = clamp(rect.left - wr.left + rect.width / 2 - pw / 2, 8, wr.width - pw - 8);
+  let top = rect.top - wr.top - ph - 10;
+  if (top < 8) top = rect.bottom - wr.top + 10;
+  top = clamp(top, 8, wr.height - ph - 8);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+/* fmtPop sits above the edited block (blockBar is hidden while editing, so no clash) */
+function placeFmtPop(){
+  const b = editingId && getBlock(editingId);
+  if (!b || b.type !== 'text') return;
+  const r = wrap.getBoundingClientRect();
+  const bx = b.x * view.zoom + view.x, by = b.y * view.zoom + view.y;
+  const bw = b.w * view.zoom, bh = b.h * view.zoom;
+  const pw = fmtPop.offsetWidth, ph = fmtPop.offsetHeight;
+  let left = clamp(bx + bw / 2 - pw / 2, 8, r.width - pw - 8);
+  let top = by - ph - 12;
+  if (top < 8) top = by + bh + 12;
+  top = clamp(top, 8, r.height - ph - 8);
+  fmtPop.style.left = left + 'px';
+  fmtPop.style.top = top + 'px';
+}
+function hideFmtPop(){ fmtPop.classList.remove('show'); }
+/* the current non-empty text selection inside a note, or null */
+function selectionRangeInNote(){
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const n = sel.anchorNode && (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
+  if (!n || !n.closest || !n.closest('.text-block .content')) return null;
+  const text = sel.toString().trim();
+  if (text.length < 2) return null;
+  return { text, rect: sel.getRangeAt(0).getBoundingClientRect() };
+}
+/* Show exactly ONE of: selPop (text selected) · fmtPop (editing, caret) · blockBar (block selected).
+   This is the single source of truth for the floating toolbars so they never overlap. */
+function updateEditorToolbars(){
+  // typing in a toolbar's font-size field → freeze the toolbars as they are
+  const ae = document.activeElement;
+  if (ae && ae.tagName === 'INPUT' && ae.closest && ae.closest('#selPop, #fmtPop, #blockBar')) return;
+  const r = selectionRangeInNote();
+  if (r){                                   // text is selected → AI + formatting menu
+    selPopText = r.text;
+    hideFmtPop();
+    const sb = selectionBlock();
+    const fi = $('spFontVal');
+    if (sb && fi && document.activeElement !== fi){
+      const rg = currentNoteRange();
+      fi.value = rg ? rangeFontPx(rg, sb) : (sb.fontSize || 16);
+    }
+    selPop.classList.add('show');
+    placeAbove(selPop, r.rect);
+    blockBar.classList.remove('show');
+    positionLinkHandles();
+    return;
+  }
+  hideSelPop();
+  if (editingId && getBlock(editingId)){    // editing with a caret → formatting-only menu
+    const fi = $('fpFontVal');
+    if (fi) fi.value = getBlock(editingId).fontSize || 16;
+    fmtPop.classList.add('show');
+    placeFmtPop();
+    blockBar.classList.remove('show');
+    positionLinkHandles();
+    return;
+  }
+  hideFmtPop();
+  positionBlockBar();                        // otherwise the normal block toolbar (if a block is selected)
+}
+function editingBlock(){ return editingId ? getBlock(editingId) : null; }
+$('fpColor').addEventListener('click', () => {
+  const b = editingBlock();
+  if (b) openForeColor($('fpColor'), b);
+});
+$('fpSmaller').addEventListener('click', () => { const b = editingBlock(); if (b) setBlockFont(b, (b.fontSize || 16) - 2); });
+$('fpBigger').addEventListener('click', () => { const b = editingBlock(); if (b) setBlockFont(b, (b.fontSize || 16) + 2); });
+/* typed font size while editing: apply, then hand focus straight back to the text */
+function fpApplyFont(v){
+  const b = editingBlock();
+  if (!b) return;
+  setBlockFont(b, v);
+  const el = blockEls.get(b.id);
+  if (el) el.firstChild.focus();
+}
+$('fpFontVal').addEventListener('change', e => fpApplyFont(+e.target.value));
+$('fpFontVal').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter'){ e.preventDefault(); fpApplyFont(+e.target.value); }
+});
+const fpCmd = (id, cmd) => $(id).addEventListener('click', () => {
+  if (editingId) document.execCommand(cmd, false);
+});
+fpCmd('fpBold', 'bold'); fpCmd('fpItalic', 'italic'); fpCmd('fpUnder', 'underline');
 /* ============================================================
    Quiz mode
    ============================================================ */
@@ -2088,8 +3948,8 @@ function showQuestion(){
 function showResults(){
   const n = quiz.questions.length;
   const pctScore = Math.round((quiz.score / n) * 100);
-  const cheer = pctScore === 100 ? 'Perfect! 🏆' : pctScore >= 80 ? 'Great job! 🎉'
-    : pctScore >= 60 ? 'Good work — almost there! 💪' : 'Keep studying — you\'ll get it! 📚';
+  const cheer = pctScore === 100 ? 'Perfect!' : pctScore >= 80 ? 'Great job!'
+    : pctScore >= 60 ? 'Good work — almost there!' : 'Keep studying — you\'ll get it!';
   quizBody.innerHTML = `
     <div class="quiz-progress"><div style="width:100%"></div></div>
     <div class="quiz-score">
@@ -2120,9 +3980,13 @@ $('docTitle').value = doc.title;
 renderAll();
 applyView();
 resetHistory();
-markClean();
 renderChat();
-checkAutosave();
+dbInit()
+  .then(showHome)
+  .catch(err => {
+    toast('Storage unavailable (' + err.message + ') — sessions cannot be saved', 'err', 8000);
+    $('homeView').classList.add('show');
+  });
 
 </script>
 </body>
