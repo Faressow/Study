@@ -7,3 +7,5 @@ chroma_db/
 *.pdf
 .vscode/
 .claude/
+node_modules/
+dist/
