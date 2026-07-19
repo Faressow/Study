@@ -798,9 +798,10 @@ html[data-theme="light"] #sidebar{
 .setup-title{font-family:'Cormorant Garamond',serif;font-weight:700;font-size:30px;color:var(--gold);letter-spacing:.05em}
 .setup-sub{font-size:13px;color:var(--text-dim);line-height:1.55}
 .setup-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:2px}
-#suResult{font-size:12.5px;font-weight:600;margin-left:8px}
+#suResult{font-size:12.5px;font-weight:600}
 #suResult.ok{color:var(--ok)}
 #suResult.err{color:var(--danger)}
+#suAdvanced:not([hidden]){display:flex;flex-direction:column;gap:14px}
 
 /* ============================================================
    Quiz
@@ -1277,23 +1278,26 @@ input.tile-input{
     <div class="field">
       <label for="suKey">AI API key</label>
       <input class="input" id="suKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
+      <div class="hint">That's all you need — the app finds your provider and model automatically.</div>
     </div>
-    <div class="field">
-      <label for="suUrl">API endpoint URL</label>
-      <input class="input" id="suUrl" placeholder="https://your-provider.com" spellcheck="false" autocomplete="off">
-      <div class="hint">Your AI provider's API address — the /chat/completions part is added automatically if you leave it out.</div>
+    <div id="suAdvanced" hidden>
+      <div class="field">
+        <label for="suUrl">API endpoint URL</label>
+        <input class="input" id="suUrl" placeholder="https://your-provider.com" spellcheck="false" autocomplete="off">
+        <div class="hint">Only for unusual providers — /chat/completions is added automatically if you leave it out.</div>
+      </div>
+      <div class="field">
+        <label for="suModel">Model name</label>
+        <input class="input" id="suModel" placeholder="the model name from your provider" spellcheck="false" autocomplete="off">
+      </div>
     </div>
-    <div class="field">
-      <label for="suModel">Model name</label>
-      <input class="input" id="suModel" placeholder="the model name from your provider" spellcheck="false" autocomplete="off">
-    </div>
-    <div>
-      <button class="btn ghost" id="suTest">Test connection</button>
+    <div style="display:flex;align-items:center;gap:8px;min-height:28px">
+      <button class="btn ghost" id="suAdvToggle" style="height:28px;padding:0 10px;font-size:12px">Advanced</button>
       <span id="suResult"></span>
     </div>
     <div class="setup-actions">
       <button class="btn ghost" id="suSkip">Skip for now</button>
-      <button class="btn primary" id="suSave">Save &amp; start</button>
+      <button class="btn primary" id="suSave">Connect</button>
     </div>
   </div>
 </div>
@@ -1319,16 +1323,16 @@ input.tile-input{
       <div class="field">
         <label for="setApiKey">AI API key</label>
         <input class="input" id="setApiKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
-        <div class="hint">Bring your own key. Stored only in this browser and sent only to the endpoint you set below.</div>
+        <div class="hint">Just the key is enough — the provider and model below are filled in automatically. Stored only on this device.</div>
       </div>
       <div class="field">
-        <label for="setApiUrl">API endpoint URL</label>
-        <input class="input" id="setApiUrl" placeholder="https://your-provider/v1/chat/completions" spellcheck="false" autocomplete="off">
-        <div class="hint">Your AI provider's API address — <code>/chat/completions</code> is added automatically if you leave it out.</div>
+        <label for="setApiUrl">API endpoint URL <span style="font-weight:400;color:var(--text-faint)">(automatic)</span></label>
+        <input class="input" id="setApiUrl" placeholder="detected from your key" spellcheck="false" autocomplete="off">
+        <div class="hint">Only change this for an unusual provider — <code>/chat/completions</code> is added automatically if missing.</div>
       </div>
       <div class="field">
-        <label for="setModel">Model name</label>
-        <input class="input" id="setModel" placeholder="the model name from your provider" spellcheck="false" autocomplete="off">
+        <label for="setModel">Model name <span style="font-weight:400;color:var(--text-faint)">(automatic)</span></label>
+        <input class="input" id="setModel" placeholder="detected from your key" spellcheck="false" autocomplete="off">
       </div>
       <div class="field">
         <label for="setLang">Translate selected text to</label>
@@ -3586,6 +3590,31 @@ function normalizeApiUrl(u){
 // repair an already-saved base URL from before this fix
 { const u = localStorage.getItem('sc-api-url'); if (u && u.trim()) localStorage.setItem('sc-api-url', normalizeApiUrl(u)); }
 
+/* key-only setup: probe the major providers and keep whichever accepts the key.
+   `hint` regexes only decide probe ORDER (distinctive key prefixes first) — every
+   candidate is still tried, so a wrong guess costs one extra request, not a failure. */
+const AI_ENDPOINTS = [
+  { url:'https://openrouter.ai/api/v1/chat/completions',   model:'openai/gpt-4o-mini',      hint:/^sk-or-/i },
+  { url:'https://api.groq.com/openai/v1/chat/completions', model:'llama-3.3-70b-versatile', hint:/^gsk_/i },
+  { url:'https://api.deepseek.com/chat/completions',       model:'deepseek-chat',           hint:/^sk-/i },
+  { url:'https://api.openai.com/v1/chat/completions',      model:'gpt-4o-mini',             hint:/^sk-/i },
+  { url:'https://api.mistral.ai/v1/chat/completions',      model:'mistral-small-latest',    hint:null }
+];
+async function detectProvider(key, onStatus){
+  const score = p => (p.hint && p.hint.test(key)) ? 1 : 0;
+  const ordered = [...AI_ENDPOINTS].sort((a, b) => score(b) - score(a));
+  let sawNetErr = false;
+  for (let i = 0; i < ordered.length; i++){
+    if (onStatus) onStatus(`Connecting… (${i + 1}/${ordered.length})`);
+    const t = await testAiConnection(key, ordered[i].url, ordered[i].model);
+    if (t.ok) return { ok:true, url:ordered[i].url, model:ordered[i].model };
+    if (t.msg.includes('Network')) sawNetErr = true;
+  }
+  return { ok:false, msg: sawNetErr
+    ? '✗ Network error (check your internet)'
+    : '✗ Key not recognized by any known provider — check it, or use Advanced' };
+}
+
 async function testAiConnection(key, url, model){
   if (!key)   return { ok:false, msg:'✗ Enter an API key first' };
   if (!url)   return { ok:false, msg:'✗ Enter the endpoint URL first' };
@@ -3615,10 +3644,23 @@ function openSettings(){
   $('testResult').className = ''; $('testResult').style.display = 'none';
   openModal('settingsModal');
 }
-$('btnSaveSettings').addEventListener('click', () => {
-  localStorage.setItem('sc-api-key', $('setApiKey').value.trim());
-  localStorage.setItem('sc-api-url', normalizeApiUrl($('setApiUrl').value));
-  localStorage.setItem('sc-model', $('setModel').value.trim());
+$('btnSaveSettings').addEventListener('click', async () => {
+  const key = $('setApiKey').value.trim();
+  let url = normalizeApiUrl($('setApiUrl').value), model = $('setModel').value.trim();
+  // key alone is enough — find the provider and model automatically
+  if (key && (!url || !model)){
+    const res = $('testResult');
+    res.style.display = 'inline'; res.className = ''; res.textContent = 'Connecting…';
+    const btn = $('btnSaveSettings'); btn.disabled = true;
+    const d = await detectProvider(key, s => { res.textContent = s; });
+    btn.disabled = false;
+    if (!d.ok){ res.className = 'err'; res.textContent = d.msg; return; }
+    url = d.url; model = d.model;
+    $('setApiUrl').value = url; $('setModel').value = model;
+  }
+  localStorage.setItem('sc-api-key', key);
+  localStorage.setItem('sc-api-url', url);
+  localStorage.setItem('sc-model', model);
   localStorage.setItem('sc-lang', $('setLang').value);
   closeModal('settingsModal');
   toast('Settings saved', 'ok', 1600);
@@ -3642,24 +3684,43 @@ function showSetup(){
   $('suResult').textContent = ''; $('suResult').className = '';
   $('setupView').classList.add('show');
 }
-$('suTest').addEventListener('click', async () => {
-  const r = $('suResult'); r.className = ''; r.textContent = 'Testing…';
-  const t = await testAiConnection($('suKey').value.trim(), normalizeApiUrl($('suUrl').value), $('suModel').value.trim());
-  r.className = t.ok ? 'ok' : 'err'; r.textContent = t.msg;
+$('suAdvToggle').addEventListener('click', () => {
+  const adv = $('suAdvanced');
+  adv.hidden = !adv.hidden;
 });
 $('suSkip').addEventListener('click', () => {
   localStorage.setItem('sc-setup-done', '1');
   $('setupView').classList.remove('show');
   toast('You can connect the AI anytime in Settings', '', 2600);
 });
-$('suSave').addEventListener('click', () => {
-  const key = $('suKey').value.trim(), url = normalizeApiUrl($('suUrl').value), model = $('suModel').value.trim();
-  if (!key || !url || !model){
-    const r = $('suResult'); r.className = 'err'; r.textContent = '✗ Fill in all three fields (or Skip for now)'; return;
+$('suSave').addEventListener('click', async () => {
+  const r = $('suResult');
+  const key = $('suKey').value.trim();
+  if (!key){ r.className = 'err'; r.textContent = '✗ Paste your API key first'; return; }
+  const advUrl = normalizeApiUrl($('suUrl').value), advModel = $('suModel').value.trim();
+  const btn = $('suSave'); btn.disabled = true; r.className = '';
+  let res;
+  if (advUrl || advModel){
+    // advanced path: the user named their own provider — needs both fields
+    if (!advUrl || !advModel){
+      r.className = 'err'; r.textContent = '✗ Advanced setup needs both the endpoint and the model';
+      btn.disabled = false; return;
+    }
+    r.textContent = 'Testing…';
+    const t = await testAiConnection(key, advUrl, advModel);
+    res = t.ok ? { ok:true, url:advUrl, model:advModel } : t;
+  } else {
+    res = await detectProvider(key, s => { r.textContent = s; });
+  }
+  btn.disabled = false;
+  if (!res.ok){
+    r.className = 'err'; r.textContent = res.msg;
+    $('suAdvanced').hidden = false;   // offer the manual way out
+    return;
   }
   localStorage.setItem('sc-api-key', key);
-  localStorage.setItem('sc-api-url', url);
-  localStorage.setItem('sc-model', model);
+  localStorage.setItem('sc-api-url', res.url);
+  localStorage.setItem('sc-model', res.model);
   localStorage.setItem('sc-setup-done', '1');
   $('setupView').classList.remove('show');
   toast('AI connected — all set', 'ok', 2200);
