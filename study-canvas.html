@@ -782,6 +782,27 @@ html[data-theme="light"] #sidebar{
 #testResult.err{display:block;color:var(--danger)}
 
 /* ============================================================
+   First-run setup screen
+   ============================================================ */
+#setupView{
+  position:fixed;inset:0;z-index:350;background:var(--bg);
+  display:none;align-items:center;justify-content:center;padding:24px;overflow-y:auto;
+}
+#setupView.show{display:flex}
+.setup-card{
+  width:100%;max-width:470px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-lg);box-shadow:var(--shadow-3);padding:28px 28px 22px;
+  display:flex;flex-direction:column;gap:14px;
+}
+.setup-brand{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;margin-bottom:4px}
+.setup-title{font-family:'Cormorant Garamond',serif;font-weight:700;font-size:30px;color:var(--gold);letter-spacing:.05em}
+.setup-sub{font-size:13px;color:var(--text-dim);line-height:1.55}
+.setup-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:2px}
+#suResult{font-size:12.5px;font-weight:600;margin-left:8px}
+#suResult.ok{color:var(--ok)}
+#suResult.err{color:var(--danger)}
+
+/* ============================================================
    Quiz
    ============================================================ */
 #quizModal .modal{max-width:560px}
@@ -1246,6 +1267,37 @@ input.tile-input{
   </aside>
 </div>
 
+<!-- ======================= FIRST-RUN SETUP ======================= -->
+<div id="setupView">
+  <div class="setup-card">
+    <div class="setup-brand">
+      <div class="setup-title">Studyboard</div>
+      <div class="setup-sub">One-time setup — connect your AI assistant.<br>It answers from your notes, explains, translates and builds quizzes.</div>
+    </div>
+    <div class="field">
+      <label for="suKey">AI API key</label>
+      <input class="input" id="suKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="suUrl">API endpoint URL</label>
+      <input class="input" id="suUrl" placeholder="https://your-provider.com" spellcheck="false" autocomplete="off">
+      <div class="hint">Your AI provider's API address — the /chat/completions part is added automatically if you leave it out.</div>
+    </div>
+    <div class="field">
+      <label for="suModel">Model name</label>
+      <input class="input" id="suModel" placeholder="the model name from your provider" spellcheck="false" autocomplete="off">
+    </div>
+    <div>
+      <button class="btn ghost" id="suTest">Test connection</button>
+      <span id="suResult"></span>
+    </div>
+    <div class="setup-actions">
+      <button class="btn ghost" id="suSkip">Skip for now</button>
+      <button class="btn primary" id="suSave">Save &amp; start</button>
+    </div>
+  </div>
+</div>
+
 <!-- ======================= SETTINGS MODAL ======================= -->
 <div class="backdrop" id="settingsModal">
   <div class="modal">
@@ -1272,7 +1324,7 @@ input.tile-input{
       <div class="field">
         <label for="setApiUrl">API endpoint URL</label>
         <input class="input" id="setApiUrl" placeholder="https://your-provider/v1/chat/completions" spellcheck="false" autocomplete="off">
-        <div class="hint">Any standard <code>/chat/completions</code> API endpoint.</div>
+        <div class="hint">Your AI provider's API address — <code>/chat/completions</code> is added automatically if you leave it out.</div>
       </div>
       <div class="field">
         <label for="setModel">Model name</label>
@@ -2884,6 +2936,11 @@ window.addEventListener('keydown', e => {
   if (ctrl && e.key.toLowerCase() === 'o'){ e.preventDefault(); openDoc(); return; }
   if (ctrl && e.altKey && e.key.toLowerCase() === 'n'){ e.preventDefault(); newDoc(); return; }
 
+  // Ctrl +/− zoom the canvas around its centre; Ctrl+0 = back to 100%
+  if (ctrl && (e.key === '+' || e.key === '=')){ e.preventDefault(); const r = wrap.getBoundingClientRect(); zoomAt(r.left + r.width/2, r.top + r.height/2, 1.2); return; }
+  if (ctrl && (e.key === '-' || e.key === '_')){ e.preventDefault(); const r = wrap.getBoundingClientRect(); zoomAt(r.left + r.width/2, r.top + r.height/2, 1/1.2); return; }
+  if (ctrl && e.key === '0'){ e.preventDefault(); view.zoom = 1; applyView(); return; }
+
   if (e.key === 'Escape'){
     if ($('quizModal').classList.contains('show')) return;
     if (colorPop.classList.contains('show')){ closeColorPop(); return; }
@@ -3517,6 +3574,37 @@ const aiModel   = () => (localStorage.getItem('sc-model') || '').trim();
 const transLang = () => localStorage.getItem('sc-lang') || 'Swedish';
 const hasKey    = () => apiKey().length > 0 && apiUrl().length > 0 && aiModel().length > 0;
 
+/* a base address like "api.example.com" becomes a full chat endpoint —
+   pasting the provider's domain alone otherwise POSTs to the root and returns 404/405 */
+function normalizeApiUrl(u){
+  u = (u || '').trim().replace(/\/+$/, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  if (!/\/chat\/completions$/i.test(u)) u += '/chat/completions';
+  return u;
+}
+// repair an already-saved base URL from before this fix
+{ const u = localStorage.getItem('sc-api-url'); if (u && u.trim()) localStorage.setItem('sc-api-url', normalizeApiUrl(u)); }
+
+async function testAiConnection(key, url, model){
+  if (!key)   return { ok:false, msg:'✗ Enter an API key first' };
+  if (!url)   return { ok:false, msg:'✗ Enter the endpoint URL first' };
+  if (!model) return { ok:false, msg:'✗ Enter a model name first' };
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify({ model, max_tokens: 4, messages: [{ role: 'user', content: 'hi' }] })
+    });
+    if (r.ok) return { ok:true, msg:'✓ AI connection works!' };
+    return { ok:false, msg:'✗ ' + (
+      r.status === 401 ? 'API key rejected' :
+      r.status === 402 ? 'No account balance' :
+      (r.status === 404 || r.status === 405) ? 'Wrong endpoint URL — it must end with /chat/completions (some providers need /v1/chat/completions)' :
+      'Error ' + r.status) };
+  } catch { return { ok:false, msg:'✗ Network error (check the URL & your internet)' }; }
+}
+
 $('btnSettings').addEventListener('click', openSettings);
 
 function openSettings(){
@@ -3529,7 +3617,7 @@ function openSettings(){
 }
 $('btnSaveSettings').addEventListener('click', () => {
   localStorage.setItem('sc-api-key', $('setApiKey').value.trim());
-  localStorage.setItem('sc-api-url', $('setApiUrl').value.trim());
+  localStorage.setItem('sc-api-url', normalizeApiUrl($('setApiUrl').value));
   localStorage.setItem('sc-model', $('setModel').value.trim());
   localStorage.setItem('sc-lang', $('setLang').value);
   closeModal('settingsModal');
@@ -3538,34 +3626,51 @@ $('btnSaveSettings').addEventListener('click', () => {
 $('btnTestKey').addEventListener('click', async () => {
   const res = $('testResult');
   res.className = ''; res.style.display = 'inline'; res.textContent = 'Testing…';
-  const key = $('setApiKey').value.trim();
-  const url = $('setApiUrl').value.trim();
-  const model = $('setModel').value.trim();
-  if (!key){ res.className = 'err'; res.textContent = '✗ Enter an API key first'; return; }
-  if (!url){ res.className = 'err'; res.textContent = '✗ Enter the endpoint URL first'; return; }
-  if (!model){ res.className = 'err'; res.textContent = '✗ Enter a model name first'; return; }
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-      body: JSON.stringify({ model, max_tokens: 4, messages: [{ role: 'user', content: 'hi' }] })
-    });
-    if (r.ok){ res.className = 'ok'; res.textContent = '✓ AI connection works!'; }
-    else { res.className = 'err'; res.textContent = '✗ ' + (r.status === 401 ? 'API key rejected' : r.status === 402 ? 'No account balance' : r.status === 404 ? 'Model or URL not found' : 'Error ' + r.status); }
-  } catch { res.className = 'err'; res.textContent = '✗ Network error (check the URL & your internet)'; }
+  const t = await testAiConnection($('setApiKey').value.trim(), normalizeApiUrl($('setApiUrl').value), $('setModel').value.trim());
+  res.className = t.ok ? 'ok' : 'err'; res.textContent = t.msg;
 });
 function requireKey(){
   if (hasKey()) return true;
-  toast('Add your AI API key, endpoint and model in Settings to use AI features', 'err', 3200);
-  openSettings();
+  toast('Connect your AI first — it only takes a minute', 'err', 2800);
+  showSetup();
   return false;
 }
+
+/* ---- first-run setup screen: shown once until saved or skipped ---- */
+function showSetup(){
+  $('suKey').value = apiKey(); $('suUrl').value = apiUrl(); $('suModel').value = aiModel();
+  $('suResult').textContent = ''; $('suResult').className = '';
+  $('setupView').classList.add('show');
+}
+$('suTest').addEventListener('click', async () => {
+  const r = $('suResult'); r.className = ''; r.textContent = 'Testing…';
+  const t = await testAiConnection($('suKey').value.trim(), normalizeApiUrl($('suUrl').value), $('suModel').value.trim());
+  r.className = t.ok ? 'ok' : 'err'; r.textContent = t.msg;
+});
+$('suSkip').addEventListener('click', () => {
+  localStorage.setItem('sc-setup-done', '1');
+  $('setupView').classList.remove('show');
+  toast('You can connect the AI anytime in Settings', '', 2600);
+});
+$('suSave').addEventListener('click', () => {
+  const key = $('suKey').value.trim(), url = normalizeApiUrl($('suUrl').value), model = $('suModel').value.trim();
+  if (!key || !url || !model){
+    const r = $('suResult'); r.className = 'err'; r.textContent = '✗ Fill in all three fields (or Skip for now)'; return;
+  }
+  localStorage.setItem('sc-api-key', key);
+  localStorage.setItem('sc-api-url', url);
+  localStorage.setItem('sc-model', model);
+  localStorage.setItem('sc-setup-done', '1');
+  $('setupView').classList.remove('show');
+  toast('AI connected — all set', 'ok', 2200);
+});
 
 async function apiError(res){
   let msg = 'Error ' + res.status;
   try { const j = await res.json(); if (j.error && j.error.message) msg = j.error.message; } catch {}
   if (res.status === 401) msg = 'Invalid API key — check it in Settings';
   if (res.status === 402) msg = 'Your AI account has no balance';
+  if (res.status === 404 || res.status === 405) msg = 'Wrong API endpoint URL — open Settings and check it ends with /chat/completions';
   if (res.status === 429) msg = 'Rate limited — wait a moment and try again';
   return new Error(msg);
 }
@@ -4537,6 +4642,9 @@ dbInit()
     $('homeView').classList.add('show');
   })
   .finally(() => document.body.classList.remove('booting'));   // reveal once the right view is ready
+
+// first launch only: offer the one-time AI setup (saved or skipped = never shown again)
+if (!hasKey() && localStorage.getItem('sc-setup-done') !== '1') showSetup();
 
 </script>
 </body>
