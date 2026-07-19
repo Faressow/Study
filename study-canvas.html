@@ -1331,8 +1331,10 @@ input.tile-input{
         <div class="hint">Only change this for an unusual provider — <code>/chat/completions</code> is added automatically if missing.</div>
       </div>
       <div class="field">
-        <label for="setModel">Model name <span style="font-weight:400;color:var(--text-faint)">(automatic)</span></label>
-        <input class="input" id="setModel" placeholder="detected from your key" spellcheck="false" autocomplete="off">
+        <label for="setModelSelect">Model</label>
+        <select class="input" id="setModelSelect"></select>
+        <input class="input" id="setModel" placeholder="type a model name" spellcheck="false" autocomplete="off" style="margin-top:7px;display:none">
+        <div class="hint">Switch the AI model here. Choose “Custom…” to type any model your provider supports.</div>
       </div>
       <div class="field">
         <label for="setLang">Translate selected text to</label>
@@ -3592,20 +3594,22 @@ function normalizeApiUrl(u){
    `hint` regexes only decide probe ORDER (distinctive key prefixes first) — every
    candidate is still tried, so a wrong guess costs one extra request, not a failure. */
 const AI_ENDPOINTS = [
-  { url:'https://openrouter.ai/api/v1/chat/completions',   model:'openai/gpt-4o-mini',      hint:/^sk-or-/i },
-  { url:'https://api.groq.com/openai/v1/chat/completions', model:'llama-3.3-70b-versatile', hint:/^gsk_/i },
-  { url:'https://api.deepseek.com/chat/completions',       model:'deepseek-chat',           hint:/^sk-/i },
-  { url:'https://api.openai.com/v1/chat/completions',      model:'gpt-4o-mini',             hint:/^sk-/i },
-  { url:'https://api.mistral.ai/v1/chat/completions',      model:'mistral-small-latest',    hint:null }
+  { url:'https://openrouter.ai/api/v1/chat/completions',   hint:/^sk-or-/i, models:['openai/gpt-4o-mini','openai/gpt-4o','anthropic/claude-3.5-sonnet','google/gemini-2.0-flash-001','meta-llama/llama-3.3-70b-instruct'] },
+  { url:'https://api.groq.com/openai/v1/chat/completions', hint:/^gsk_/i,   models:['llama-3.3-70b-versatile','llama-3.1-8b-instant'] },
+  { url:'https://api.deepseek.com/chat/completions',       hint:/^sk-/i,    models:['deepseek-chat','deepseek-reasoner'] },
+  { url:'https://api.openai.com/v1/chat/completions',      hint:/^sk-/i,    models:['gpt-4o-mini','gpt-4o','gpt-4.1-mini','o4-mini'] },
+  { url:'https://api.mistral.ai/v1/chat/completions',      hint:null,       models:['mistral-small-latest','mistral-large-latest'] }
 ];
+/* the known model list for a saved endpoint — powers the model dropdown */
+function modelsForUrl(url){ const e = AI_ENDPOINTS.find(x => x.url === url); return e ? e.models.slice() : []; }
 async function detectProvider(key, onStatus){
   const score = p => (p.hint && p.hint.test(key)) ? 1 : 0;
   const ordered = [...AI_ENDPOINTS].sort((a, b) => score(b) - score(a));
   let sawNetErr = false;
   for (let i = 0; i < ordered.length; i++){
     if (onStatus) onStatus(`Connecting… (${i + 1}/${ordered.length})`);
-    const t = await testAiConnection(key, ordered[i].url, ordered[i].model);
-    if (t.ok) return { ok:true, url:ordered[i].url, model:ordered[i].model };
+    const t = await testAiConnection(key, ordered[i].url, ordered[i].models[0]);
+    if (t.ok) return { ok:true, url:ordered[i].url, model:ordered[i].models[0] };
     if (t.msg.includes('Network')) sawNetErr = true;
   }
   return { ok:false, msg: sawNetErr
@@ -3634,27 +3638,51 @@ async function testAiConnection(key, url, model){
 
 $('btnSettings').addEventListener('click', openSettings);
 
+/* fill the model dropdown from the current provider's known models + whatever is
+   already saved + a Custom… escape hatch */
+function fillModelSelect(){
+  const sel = $('setModelSelect');
+  const cur = aiModel();
+  const list = modelsForUrl(apiUrl());
+  if (cur && !list.includes(cur)) list.unshift(cur);   // keep a custom/unknown model visible
+  sel.innerHTML = list.map(m => `<option value="${m}">${m}</option>`).join('')
+    + '<option value="__custom">Custom…</option>';
+  sel.value = (cur && list.includes(cur)) ? cur : (list[0] || '__custom');
+  syncCustomModel();
+}
+function syncCustomModel(){
+  const isCustom = $('setModelSelect').value === '__custom';
+  $('setModel').style.display = isCustom ? 'block' : 'none';
+  if (isCustom) $('setModel').focus();
+}
+function chosenModel(){
+  const v = $('setModelSelect').value;
+  return v === '__custom' ? $('setModel').value.trim() : v;
+}
+$('setModelSelect').addEventListener('change', syncCustomModel);
+
 function openSettings(){
   $('setApiKey').value = apiKey();
   $('setApiUrl').value = apiUrl();
-  $('setModel').value  = aiModel();
+  $('setModel').value  = '';
+  fillModelSelect();
   $('setLang').value   = transLang();
   $('testResult').className = ''; $('testResult').style.display = 'none';
   openModal('settingsModal');
 }
 $('btnSaveSettings').addEventListener('click', async () => {
   const key = $('setApiKey').value.trim();
-  let url = normalizeApiUrl($('setApiUrl').value), model = $('setModel').value.trim();
-  // key alone is enough — find the provider and model automatically
-  if (key && (!url || !model)){
+  let url = normalizeApiUrl($('setApiUrl').value), model = chosenModel();
+  // key alone is enough — find the provider (and its default model) automatically
+  if (key && !url){
     const res = $('testResult');
     res.style.display = 'inline'; res.className = ''; res.textContent = 'Connecting…';
     const btn = $('btnSaveSettings'); btn.disabled = true;
     const d = await detectProvider(key, s => { res.textContent = s; });
     btn.disabled = false;
     if (!d.ok){ res.className = 'err'; res.textContent = d.msg; return; }
-    url = d.url; model = d.model;
-    $('setApiUrl').value = url; $('setModel').value = model;
+    url = d.url; if (!model) model = d.model;
+    $('setApiUrl').value = url;
   }
   localStorage.setItem('sc-api-key', key);
   localStorage.setItem('sc-api-url', url);
@@ -3666,7 +3694,7 @@ $('btnSaveSettings').addEventListener('click', async () => {
 $('btnTestKey').addEventListener('click', async () => {
   const res = $('testResult');
   res.className = ''; res.style.display = 'inline'; res.textContent = 'Testing…';
-  const t = await testAiConnection($('setApiKey').value.trim(), normalizeApiUrl($('setApiUrl').value), $('setModel').value.trim());
+  const t = await testAiConnection($('setApiKey').value.trim(), normalizeApiUrl($('setApiUrl').value), chosenModel());
   res.className = t.ok ? 'ok' : 'err'; res.textContent = t.msg;
 });
 function requireKey(){
