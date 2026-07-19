@@ -3723,11 +3723,13 @@ $('suSave').addEventListener('click', async () => {
   const r = $('suResult');
   const key = $('suKey').value.trim();
   if (!key){ r.className = 'err'; r.textContent = '✗ Paste your API key first'; return; }
+  // Remember the key IMMEDIATELY so it is never lost — even if the check below fails,
+  // it will be pre-filled next time instead of forcing a full re-type.
+  localStorage.setItem('sc-api-key', key);
   const advUrl = normalizeApiUrl($('suUrl').value), advModel = $('suModel').value.trim();
   const btn = $('suSave'); btn.disabled = true; r.className = '';
   let res;
   if (advUrl || advModel){
-    // advanced path: the user named their own provider — needs both fields
     if (!advUrl || !advModel){
       r.className = 'err'; r.textContent = '✗ Advanced setup needs both the endpoint and the model';
       btn.disabled = false; return;
@@ -3739,17 +3741,19 @@ $('suSave').addEventListener('click', async () => {
     res = await detectProvider(key, s => { r.textContent = s; });
   }
   btn.disabled = false;
-  if (!res.ok){
-    r.className = 'err'; r.textContent = res.msg;
-    $('suAdvanced').hidden = false;   // offer the manual way out
-    return;
-  }
-  localStorage.setItem('sc-api-key', key);
-  localStorage.setItem('sc-api-url', res.url);
-  localStorage.setItem('sc-model', res.model);
+  // engaged once → never auto-show this screen again (AI is gated on-demand by requireKey)
   localStorage.setItem('sc-setup-done', '1');
-  $('setupView').classList.remove('show');
-  toast('AI connected — all set', 'ok', 2200);
+  if (res.ok){
+    localStorage.setItem('sc-api-url', res.url);
+    localStorage.setItem('sc-model', res.model);
+    $('setupView').classList.remove('show');
+    toast('AI connected — all set', 'ok', 2200);
+  } else {
+    // key saved but not verified — DON'T trap the user; let them into their notes.
+    // The AI can be fixed anytime in Settings; requireKey will prompt if they use it.
+    $('setupView').classList.remove('show');
+    toast("Key saved, but couldn't verify it — check it in Settings if the AI doesn't answer.", 'err', 5500);
+  }
 });
 
 async function apiError(res){
