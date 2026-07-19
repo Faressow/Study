@@ -2940,10 +2940,8 @@ window.addEventListener('keydown', e => {
   if (ctrl && e.key.toLowerCase() === 'o'){ e.preventDefault(); openDoc(); return; }
   if (ctrl && e.altKey && e.key.toLowerCase() === 'n'){ e.preventDefault(); newDoc(); return; }
 
-  // Ctrl +/− zoom the canvas around its centre; Ctrl+0 = back to 100%
-  if (ctrl && (e.key === '+' || e.key === '=')){ e.preventDefault(); const r = wrap.getBoundingClientRect(); zoomAt(r.left + r.width/2, r.top + r.height/2, 1.2); return; }
-  if (ctrl && (e.key === '-' || e.key === '_')){ e.preventDefault(); const r = wrap.getBoundingClientRect(); zoomAt(r.left + r.width/2, r.top + r.height/2, 1/1.2); return; }
-  if (ctrl && e.key === '0'){ e.preventDefault(); view.zoom = 1; applyView(); return; }
+  // Ctrl +/− is deliberately NOT handled here: it must reach the browser/Electron
+  // shell so it zooms the whole UI like Firefox/VS Code (canvas zoom = Ctrl+wheel)
 
   if (e.key === 'Escape'){
     if ($('quizModal').classList.contains('show')) return;
