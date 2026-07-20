@@ -60,9 +60,16 @@ function createWindow() {
 
   // Fullscreen: F11 toggles, Esc leaves it. There's no menu, so the usual F11
   // accelerator doesn't exist — bind it directly on the window's key events.
+  // Fullscreen toggles. Two shortcuts so it works on laptops (e.g. ThinkPads)
+  // where the F-key row is hardware-mapped and F11 may not reach the app:
+  //   • F11
+  //   • Alt+Enter   (function-key-independent)
+  // Esc leaves fullscreen. There's no menu, so these are bound on key events.
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
-    if (input.key === 'F11') {
+    const isF11 = input.key === 'F11'
+    const isAltEnter = input.alt && (input.key === 'Enter' || input.code === 'Enter' || input.code === 'NumpadEnter')
+    if (isF11 || isAltEnter) {
       win.setFullScreen(!win.isFullScreen())
       event.preventDefault()
     } else if (input.key === 'Escape' && win.isFullScreen()) {
