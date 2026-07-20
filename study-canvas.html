@@ -801,7 +801,6 @@ html[data-theme="light"] #sidebar{
 #suResult{font-size:12.5px;font-weight:600}
 #suResult.ok{color:var(--ok)}
 #suResult.err{color:var(--danger)}
-#suAdvanced:not([hidden]){display:flex;flex-direction:column;gap:14px}
 
 /* ============================================================
    Quiz
@@ -1278,23 +1277,17 @@ input.tile-input{
     <div class="field">
       <label for="suKey">AI API key</label>
       <input class="input" id="suKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
-      <div class="hint">That's all you need — the app finds your provider and model automatically.</div>
     </div>
-    <div id="suAdvanced" hidden>
-      <div class="field">
-        <label for="suUrl">API endpoint URL</label>
-        <input class="input" id="suUrl" placeholder="https://your-provider.com" spellcheck="false" autocomplete="off">
-        <div class="hint">Only for unusual providers — /chat/completions is added automatically if you leave it out.</div>
-      </div>
-      <div class="field">
-        <label for="suModel">Model name</label>
-        <input class="input" id="suModel" placeholder="the model name from your provider" spellcheck="false" autocomplete="off">
-      </div>
+    <div class="field">
+      <label for="suUrl">API endpoint URL <span style="font-weight:400;color:var(--text-faint)">(optional)</span></label>
+      <input class="input" id="suUrl" placeholder="auto-detected — or paste your provider's URL" spellcheck="false" autocomplete="off">
     </div>
-    <div style="display:flex;align-items:center;gap:8px;min-height:28px">
-      <button class="btn ghost" id="suAdvToggle" style="height:28px;padding:0 10px;font-size:12px">Advanced</button>
-      <span id="suResult"></span>
+    <div class="field">
+      <label for="suModel">Model name <span style="font-weight:400;color:var(--text-faint)">(optional)</span></label>
+      <input class="input" id="suModel" placeholder="auto-detected — or type your model" spellcheck="false" autocomplete="off">
+      <div class="hint">Works with any AI provider. For DeepSeek, OpenAI, OpenRouter, Groq or Mistral just paste the key — the endpoint and model fill in themselves. For any other provider, add its <code>/chat/completions</code> URL and model above.</div>
     </div>
+    <div style="min-height:22px"><span id="suResult"></span></div>
     <div class="setup-actions">
       <button class="btn ghost" id="suSkip">Skip for now</button>
       <button class="btn primary" id="suSave">Connect</button>
@@ -3710,10 +3703,6 @@ function showSetup(){
   $('suResult').textContent = ''; $('suResult').className = '';
   $('setupView').classList.add('show');
 }
-$('suAdvToggle').addEventListener('click', () => {
-  const adv = $('suAdvanced');
-  adv.hidden = !adv.hidden;
-});
 $('suSkip').addEventListener('click', () => {
   localStorage.setItem('sc-setup-done', '1');
   $('setupView').classList.remove('show');
@@ -3731,7 +3720,7 @@ $('suSave').addEventListener('click', async () => {
   let res;
   if (advUrl || advModel){
     if (!advUrl || !advModel){
-      r.className = 'err'; r.textContent = '✗ Advanced setup needs both the endpoint and the model';
+      r.className = 'err'; r.textContent = '✗ Enter both the endpoint and the model (or leave both blank to auto-detect)';
       btn.disabled = false; return;
     }
     r.textContent = 'Testing…';
