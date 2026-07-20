@@ -57,6 +57,20 @@ function createWindow() {
   })
 
   Menu.setApplicationMenu(null)
+
+  // Fullscreen: F11 toggles, Esc leaves it. There's no menu, so the usual F11
+  // accelerator doesn't exist — bind it directly on the window's key events.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    if (input.key === 'F11') {
+      win.setFullScreen(!win.isFullScreen())
+      event.preventDefault()
+    } else if (input.key === 'Escape' && win.isFullScreen()) {
+      win.setFullScreen(false)
+      event.preventDefault()
+    }
+  })
+
   win.once('ready-to-show', () => { win.maximize(); win.show() })
   // lock the zoom in after load (and keep it fixed if the page ever reloads)
   win.webContents.on('did-finish-load', () => win.webContents.setZoomFactor(UI_ZOOM_FACTOR))
