@@ -1,9 +1,31 @@
-const { app, BrowserWindow, Menu } = require('electron')
+const { app, BrowserWindow, Menu, session } = require('electron')
 const path = require('path')
 
 // Fixed UI zoom so the whole interface opens at a comfortable, zoomed-out size
 // (no Ctrl +/- zoom — the level is locked here).
 const UI_ZOOM_FACTOR = 0.75
+
+// Strip CORS from the AI provider responses in the main process instead of
+// disabling webSecurity in the renderer. Disabling webSecurity gives the
+// file:// page an opaque origin, and IndexedDB refuses to open on an opaque
+// origin ("Internal error.") — which broke session saving. This keeps
+// webSecurity ON (IndexedDB works) while still letting the user's chosen AI
+// endpoint be called without the browser blocking it on CORS.
+function enableCorsBypass() {
+  const filter = { urls: ['*://*/*'] }   // only real network requests, never file://
+
+  session.defaultSession.webRequest.onHeadersReceived(filter, (details, cb) => {
+    const headers = details.responseHeaders || {}
+    // drop any existing CORS headers so ours are the only ones
+    for (const k of Object.keys(headers)) {
+      if (/^access-control-/i.test(k)) delete headers[k]
+    }
+    headers['Access-Control-Allow-Origin'] = ['*']
+    headers['Access-Control-Allow-Methods'] = ['GET, POST, PUT, DELETE, OPTIONS']
+    headers['Access-Control-Allow-Headers'] = ['*, Authorization, Content-Type']
+    cb({ responseHeaders: headers })
+  })
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -18,10 +40,8 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      zoomFactor: UI_ZOOM_FACTOR,
-      // This is a trusted local single-file app. Disabling webSecurity lets the
-      // user's chosen AI endpoint be called without browser CORS blocking it.
-      webSecurity: false
+      zoomFactor: UI_ZOOM_FACTOR
+      // webSecurity stays ON (default) so IndexedDB works; CORS is handled above.
     }
   })
 
@@ -32,7 +52,10 @@ function createWindow() {
   win.loadFile('study-canvas.html')
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  enableCorsBypass()
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
