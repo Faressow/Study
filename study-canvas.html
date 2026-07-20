@@ -1279,13 +1279,13 @@ input.tile-input{
       <input class="input" id="suKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
     </div>
     <div class="field">
-      <label for="suUrl">API endpoint URL <span style="font-weight:400;color:var(--text-faint)">(optional)</span></label>
-      <input class="input" id="suUrl" placeholder="auto-detected — or paste your provider's URL" spellcheck="false" autocomplete="off">
+      <label for="suUrl">API endpoint URL</label>
+      <input class="input" id="suUrl" placeholder="https://your-provider.com/v1/chat/completions" spellcheck="false" autocomplete="off">
     </div>
     <div class="field">
-      <label for="suModel">Model name <span style="font-weight:400;color:var(--text-faint)">(optional)</span></label>
-      <input class="input" id="suModel" placeholder="auto-detected — or type your model" spellcheck="false" autocomplete="off">
-      <div class="hint">Works with any AI provider. For DeepSeek, OpenAI, OpenRouter, Groq or Mistral just paste the key — the endpoint and model fill in themselves. For any other provider, add its <code>/chat/completions</code> URL and model above.</div>
+      <label for="suModel">Model name</label>
+      <input class="input" id="suModel" placeholder="e.g. the exact model id from your provider" spellcheck="false" autocomplete="off">
+      <div class="hint">Enter your own AI provider's details. Works with any standard <code>/chat/completions</code> API — paste the endpoint URL and the exact model name from your provider, plus your key above.</div>
     </div>
     <div style="min-height:22px"><span id="suResult"></span></div>
     <div class="setup-actions">
@@ -1316,18 +1316,18 @@ input.tile-input{
       <div class="field">
         <label for="setApiKey">AI API key</label>
         <input class="input" id="setApiKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
-        <div class="hint">Just the key is enough — the provider and model below are filled in automatically. Stored only on this device.</div>
+        <div class="hint">Enter your own AI provider's key, endpoint and model below. Stored only on this device.</div>
       </div>
       <div class="field">
-        <label for="setApiUrl">API endpoint URL <span style="font-weight:400;color:var(--text-faint)">(automatic)</span></label>
-        <input class="input" id="setApiUrl" placeholder="detected from your key" spellcheck="false" autocomplete="off">
-        <div class="hint">Only change this for an unusual provider — <code>/chat/completions</code> is added automatically if missing.</div>
+        <label for="setApiUrl">API endpoint URL</label>
+        <input class="input" id="setApiUrl" placeholder="https://your-provider.com/v1/chat/completions" spellcheck="false" autocomplete="off">
+        <div class="hint">Your provider's chat endpoint — <code>/chat/completions</code> is added automatically if you leave it off.</div>
       </div>
       <div class="field">
         <label for="setModelSelect">Model</label>
         <select class="input" id="setModelSelect"></select>
-        <input class="input" id="setModel" placeholder="type a model name" spellcheck="false" autocomplete="off" style="margin-top:7px;display:none">
-        <div class="hint">Switch the AI model here. Choose “Custom…” to type any model your provider supports.</div>
+        <input class="input" id="setModel" placeholder="type your model name" spellcheck="false" autocomplete="off" style="margin-top:7px;display:none">
+        <div class="hint">Pick “Custom…” to type the exact model name your provider supports.</div>
       </div>
       <div class="field">
         <label for="setLang">Translate selected text to</label>
@@ -3583,33 +3583,18 @@ function normalizeApiUrl(u){
 // repair an already-saved base URL from before this fix
 { const u = localStorage.getItem('sc-api-url'); if (u && u.trim()) localStorage.setItem('sc-api-url', normalizeApiUrl(u)); }
 
-/* key-only setup: probe the major providers and keep whichever accepts the key.
-   `hint` regexes only decide probe ORDER (distinctive key prefixes first) — every
-   candidate is still tried, so a wrong guess costs one extra request, not a failure. */
+/* Known endpoints → their model lists. Setup is fully manual (you type your own
+   endpoint + model); this table only supplies model suggestions in the Settings
+   dropdown when your saved endpoint URL happens to match a known one. */
 const AI_ENDPOINTS = [
-  { url:'https://openrouter.ai/api/v1/chat/completions',   hint:/^sk-or-/i, models:['openai/gpt-4o-mini','openai/gpt-4o','anthropic/claude-3.5-sonnet','google/gemini-2.0-flash-001','meta-llama/llama-3.3-70b-instruct'] },
-  { url:'https://api.groq.com/openai/v1/chat/completions', hint:/^gsk_/i,   models:['llama-3.3-70b-versatile','llama-3.1-8b-instant'] },
-  { url:'https://api.deepseek.com/chat/completions',       hint:/^sk-/i,    models:['deepseek-chat','deepseek-reasoner'] },
-  { url:'https://api.openai.com/v1/chat/completions',      hint:/^sk-/i,    models:['gpt-4o-mini','gpt-4o','gpt-4.1-mini','o4-mini'] },
-  { url:'https://api.mistral.ai/v1/chat/completions',      hint:null,       models:['mistral-small-latest','mistral-large-latest'] }
+  { url:'https://openrouter.ai/api/v1/chat/completions',   models:['openai/gpt-4o-mini','openai/gpt-4o','anthropic/claude-3.5-sonnet','google/gemini-2.0-flash-001','meta-llama/llama-3.3-70b-instruct'] },
+  { url:'https://api.groq.com/openai/v1/chat/completions', models:['llama-3.3-70b-versatile','llama-3.1-8b-instant'] },
+  { url:'https://api.deepseek.com/chat/completions',       models:['deepseek-chat','deepseek-reasoner'] },
+  { url:'https://api.openai.com/v1/chat/completions',      models:['gpt-4o-mini','gpt-4o','gpt-4.1-mini','o4-mini'] },
+  { url:'https://api.mistral.ai/v1/chat/completions',      models:['mistral-small-latest','mistral-large-latest'] }
 ];
 /* the known model list for a saved endpoint — powers the model dropdown */
 function modelsForUrl(url){ const e = AI_ENDPOINTS.find(x => x.url === url); return e ? e.models.slice() : []; }
-async function detectProvider(key, onStatus){
-  const score = p => (p.hint && p.hint.test(key)) ? 1 : 0;
-  const ordered = [...AI_ENDPOINTS].sort((a, b) => score(b) - score(a));
-  let sawNetErr = false;
-  for (let i = 0; i < ordered.length; i++){
-    if (onStatus) onStatus(`Connecting… (${i + 1}/${ordered.length})`);
-    const t = await testAiConnection(key, ordered[i].url, ordered[i].models[0]);
-    if (t.ok) return { ok:true, url:ordered[i].url, model:ordered[i].models[0] };
-    if (t.msg.includes('Network')) sawNetErr = true;
-  }
-  return { ok:false, msg: sawNetErr
-    ? '✗ Network error (check your internet)'
-    : '✗ Key not recognized by any known provider — check it, or use Advanced' };
-}
-
 async function testAiConnection(key, url, model){
   if (!key)   return { ok:false, msg:'✗ Enter an API key first' };
   if (!url)   return { ok:false, msg:'✗ Enter the endpoint URL first' };
@@ -3664,19 +3649,9 @@ function openSettings(){
   openModal('settingsModal');
 }
 $('btnSaveSettings').addEventListener('click', async () => {
+  // Fully manual — save exactly what you typed (no auto-detection).
   const key = $('setApiKey').value.trim();
-  let url = normalizeApiUrl($('setApiUrl').value), model = chosenModel();
-  // key alone is enough — find the provider (and its default model) automatically
-  if (key && !url){
-    const res = $('testResult');
-    res.style.display = 'inline'; res.className = ''; res.textContent = 'Connecting…';
-    const btn = $('btnSaveSettings'); btn.disabled = true;
-    const d = await detectProvider(key, s => { res.textContent = s; });
-    btn.disabled = false;
-    if (!d.ok){ res.className = 'err'; res.textContent = d.msg; return; }
-    url = d.url; if (!model) model = d.model;
-    $('setApiUrl').value = url;
-  }
+  const url = normalizeApiUrl($('setApiUrl').value), model = chosenModel();
   localStorage.setItem('sc-api-key', key);
   localStorage.setItem('sc-api-url', url);
   localStorage.setItem('sc-model', model);
@@ -3711,37 +3686,30 @@ $('suSkip').addEventListener('click', () => {
 $('suSave').addEventListener('click', async () => {
   const r = $('suResult');
   const key = $('suKey').value.trim();
-  if (!key){ r.className = 'err'; r.textContent = '✗ Paste your API key first'; return; }
-  // Remember the key IMMEDIATELY so it is never lost — even if the check below fails,
-  // it will be pre-filled next time instead of forcing a full re-type.
+  const url = normalizeApiUrl($('suUrl').value);
+  const model = $('suModel').value.trim();
+  // Fully manual: all three are required — you enter your own provider's details.
+  if (!key){   r.className = 'err'; r.textContent = '✗ Paste your API key first'; return; }
+  if (!url){   r.className = 'err'; r.textContent = '✗ Enter your API endpoint URL'; return; }
+  if (!model){ r.className = 'err'; r.textContent = '✗ Enter the model name'; return; }
+  // Remember everything IMMEDIATELY so it is never lost — even if the test below
+  // fails, the fields are pre-filled next time instead of forcing a full re-type.
   localStorage.setItem('sc-api-key', key);
-  const advUrl = normalizeApiUrl($('suUrl').value), advModel = $('suModel').value.trim();
-  const btn = $('suSave'); btn.disabled = true; r.className = '';
-  let res;
-  if (advUrl || advModel){
-    if (!advUrl || !advModel){
-      r.className = 'err'; r.textContent = '✗ Enter both the endpoint and the model (or leave both blank to auto-detect)';
-      btn.disabled = false; return;
-    }
-    r.textContent = 'Testing…';
-    const t = await testAiConnection(key, advUrl, advModel);
-    res = t.ok ? { ok:true, url:advUrl, model:advModel } : t;
-  } else {
-    res = await detectProvider(key, s => { r.textContent = s; });
-  }
+  localStorage.setItem('sc-api-url', url);
+  localStorage.setItem('sc-model', model);
+  const btn = $('suSave'); btn.disabled = true; r.className = ''; r.textContent = 'Testing…';
+  const t = await testAiConnection(key, url, model);
   btn.disabled = false;
   // engaged once → never auto-show this screen again (AI is gated on-demand by requireKey)
   localStorage.setItem('sc-setup-done', '1');
-  if (res.ok){
-    localStorage.setItem('sc-api-url', res.url);
-    localStorage.setItem('sc-model', res.model);
+  if (t.ok){
     $('setupView').classList.remove('show');
     toast('AI connected — all set', 'ok', 2200);
   } else {
-    // key saved but not verified — DON'T trap the user; let them into their notes.
+    // saved but not verified — DON'T trap the user; let them into their notes.
     // The AI can be fixed anytime in Settings; requireKey will prompt if they use it.
     $('setupView').classList.remove('show');
-    toast("Key saved, but couldn't verify it — check it in Settings if the AI doesn't answer.", 'err', 5500);
+    toast(t.msg + " — saved anyway; fix it in Settings if the AI doesn't answer.", 'err', 5500);
   }
 });
 
