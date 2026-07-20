@@ -1,6 +1,15 @@
 const { app, BrowserWindow, Menu, session } = require('electron')
 const path = require('path')
 
+// Only ONE copy of the app may run at a time. IndexedDB (LevelDB) locks the
+// database to a single process — a second instance can't open it and fails with
+// "Storage unavailable (Internal error.) — sessions cannot be saved". So if an
+// instance is already running, hand off to it (focus its window) and quit this one.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+
 // Fixed UI zoom so the whole interface opens at a comfortable, zoomed-out size
 // (no Ctrl +/- zoom — the level is locked here).
 const UI_ZOOM_FACTOR = 0.75
@@ -27,6 +36,8 @@ function enableCorsBypass() {
   })
 }
 
+let mainWindow = null
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -50,7 +61,18 @@ function createWindow() {
   // lock the zoom in after load (and keep it fixed if the page ever reloads)
   win.webContents.on('did-finish-load', () => win.webContents.setZoomFactor(UI_ZOOM_FACTOR))
   win.loadFile('study-canvas.html')
+  mainWindow = win
 }
+
+// A second launch fires this in the FIRST (running) instance — focus its window
+// instead of letting a competing copy open and fight over the database lock.
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+  }
+})
 
 app.whenReady().then(() => {
   enableCorsBypass()
@@ -64,3 +86,5 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
+
+}   // end single-instance-lock guard
