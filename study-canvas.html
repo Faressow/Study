@@ -744,6 +744,10 @@ html[data-theme="light"] #sidebar{
 }
 .field label{display:block;font-size:12.5px;font-weight:600;color:var(--text-dim);margin-bottom:5px}
 .field .hint{font-size:11.5px;color:var(--text-faint);margin-top:5px;line-height:1.45}
+.lbl-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.lbl-row label{margin-bottom:0}
+.rm-link{background:none;border:0;color:var(--text-faint);font:inherit;font-size:11px;font-weight:600;cursor:pointer;padding:2px 6px;border-radius:5px;line-height:1}
+.rm-link:hover{color:#fff;background:#e5484d}
 .theme-choice{display:flex;gap:8px}
 .theme-opt{
   flex:1;height:40px;border-radius:var(--r-sm);border:1.5px solid var(--border);
@@ -1314,20 +1318,24 @@ input.tile-input{
         </div>
       </div>
       <div class="field">
-        <label for="setApiKey">AI API key</label>
+        <div class="lbl-row"><label for="setApiKey">AI API key</label><button type="button" class="rm-link" id="rmKey">Remove</button></div>
         <input class="input" id="setApiKey" type="password" placeholder="Paste your API key" autocomplete="off" spellcheck="false">
         <div class="hint">Enter your own AI provider's key, endpoint and model below. Stored only on this device.</div>
       </div>
       <div class="field">
-        <label for="setApiUrl">API endpoint URL</label>
+        <div class="lbl-row"><label for="setApiUrl">API endpoint URL</label><button type="button" class="rm-link" id="rmUrl">Remove</button></div>
         <input class="input" id="setApiUrl" placeholder="https://your-provider.com/v1/chat/completions" spellcheck="false" autocomplete="off">
         <div class="hint">Your provider's chat endpoint — <code>/chat/completions</code> is added automatically if you leave it off.</div>
       </div>
       <div class="field">
-        <label for="setModelSelect">Model</label>
+        <div class="lbl-row"><label for="setModelSelect">Model</label><button type="button" class="rm-link" id="rmModel">Remove</button></div>
         <select class="input" id="setModelSelect"></select>
         <input class="input" id="setModel" placeholder="type your model name" spellcheck="false" autocomplete="off" style="margin-top:7px;display:none">
         <div class="hint">Pick “Custom…” to type the exact model name your provider supports.</div>
+      </div>
+      <div class="field">
+        <button class="btn ghost" id="rmAll" style="color:#e5484d;border-color:#e5484d55">Remove API (reset)</button>
+        <div class="hint">Clears the key, endpoint and model together and brings back the one-time setup screen. Your notes and sessions are kept.</div>
       </div>
       <div class="field">
         <label for="setLang">Translate selected text to</label>
@@ -3664,6 +3672,29 @@ $('btnTestKey').addEventListener('click', async () => {
   res.className = ''; res.style.display = 'inline'; res.textContent = 'Testing…';
   const t = await testAiConnection($('setApiKey').value.trim(), normalizeApiUrl($('setApiUrl').value), chosenModel());
   res.className = t.ok ? 'ok' : 'err'; res.textContent = t.msg;
+});
+
+/* ---- Remove controls: each field on its own, plus a full reset ---- */
+$('rmKey').addEventListener('click', () => {
+  localStorage.removeItem('sc-api-key'); $('setApiKey').value = '';
+  $('testResult').style.display = 'none'; toast('API key removed', 'ok', 1400);
+});
+$('rmUrl').addEventListener('click', () => {
+  localStorage.removeItem('sc-api-url'); $('setApiUrl').value = '';
+  fillModelSelect();   // model suggestions follow the (now empty) endpoint
+  $('testResult').style.display = 'none'; toast('Endpoint URL removed', 'ok', 1400);
+});
+$('rmModel').addEventListener('click', () => {
+  localStorage.removeItem('sc-model'); $('setModel').value = ''; fillModelSelect();
+  $('testResult').style.display = 'none'; toast('Model removed', 'ok', 1400);
+});
+$('rmAll').addEventListener('click', () => {
+  // remove the whole AI config together — brings back the one-time setup screen.
+  ['sc-api-key','sc-api-url','sc-model','sc-setup-done'].forEach(k => localStorage.removeItem(k));
+  $('setApiKey').value = ''; $('setApiUrl').value = ''; $('setModel').value = ''; fillModelSelect();
+  closeModal('settingsModal');
+  showSetup();
+  toast('AI removed — enter your details to reconnect', 'ok', 2600);
 });
 function requireKey(){
   if (hasKey()) return true;

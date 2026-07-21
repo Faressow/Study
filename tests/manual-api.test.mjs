@@ -112,6 +112,34 @@ try {
   check('settings save makes NO network probe', j6.calls === 0, JSON.stringify(j6));
   check('settings saves typed key/url/model verbatim', j6.key === 'sk-settings' && j6.url === 'https://s.test/v1/chat/completions' && j6.model === 'settings-model', JSON.stringify(j6));
 
+  // Helper: seed a full saved config, then open settings fresh
+  const SEED = `(() => { localStorage.setItem('sc-api-key','sk-seed'); localStorage.setItem('sc-api-url','https://seed.test/v1/chat/completions'); localStorage.setItem('sc-model','seed-model'); localStorage.setItem('sc-setup-done','1'); openSettings(); })()`;
+
+  // T7: "Remove" on the key clears ONLY the key
+  await evaluate(RESET_AND_SPY); await evaluate(SEED);
+  await evaluate(`rmKey.click()`); await sleep(200);
+  const j7 = JSON.parse(await evaluate(`JSON.stringify({ key: localStorage.getItem('sc-api-key'), url: localStorage.getItem('sc-api-url'), model: localStorage.getItem('sc-model'), input: setApiKey.value })`));
+  check('Remove key clears only the key (url/model kept)', j7.key === null && j7.url === 'https://seed.test/v1/chat/completions' && j7.model === 'seed-model' && j7.input === '', JSON.stringify(j7));
+
+  // T8: "Remove" on the endpoint clears ONLY the url
+  await evaluate(RESET_AND_SPY); await evaluate(SEED);
+  await evaluate(`rmUrl.click()`); await sleep(200);
+  const j8 = JSON.parse(await evaluate(`JSON.stringify({ key: localStorage.getItem('sc-api-key'), url: localStorage.getItem('sc-api-url'), model: localStorage.getItem('sc-model') })`));
+  check('Remove endpoint clears only the url (key/model kept)', j8.url === null && j8.key === 'sk-seed' && j8.model === 'seed-model', JSON.stringify(j8));
+
+  // T9: "Remove" on the model clears ONLY the model
+  await evaluate(RESET_AND_SPY); await evaluate(SEED);
+  await evaluate(`rmModel.click()`); await sleep(200);
+  const j9 = JSON.parse(await evaluate(`JSON.stringify({ key: localStorage.getItem('sc-api-key'), url: localStorage.getItem('sc-api-url'), model: localStorage.getItem('sc-model') })`));
+  check('Remove model clears only the model (key/url kept)', j9.model === null && j9.key === 'sk-seed' && j9.url === 'https://seed.test/v1/chat/completions', JSON.stringify(j9));
+
+  // T10: "Remove API (reset)" clears everything + setup flag and reopens setup
+  await evaluate(RESET_AND_SPY); await evaluate(SEED);
+  await evaluate(`rmAll.click()`); await sleep(400);
+  const j10 = JSON.parse(await evaluate(`JSON.stringify({ key: localStorage.getItem('sc-api-key'), url: localStorage.getItem('sc-api-url'), model: localStorage.getItem('sc-model'), setupDone: localStorage.getItem('sc-setup-done'), setupVisible: setupView.classList.contains('show'), settingsOpen: settingsModal.classList.contains('show') })`));
+  check('Remove API clears all four keys', j10.key === null && j10.url === null && j10.model === null && j10.setupDone === null, JSON.stringify(j10));
+  check('Remove API reopens the setup screen', j10.setupVisible === true && j10.settingsOpen === false, JSON.stringify(j10));
+
 } catch (e) {
   check('test harness ran without error', false, e.message);
 } finally {
