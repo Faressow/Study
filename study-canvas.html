@@ -4078,7 +4078,7 @@ $('btnNewChat').addEventListener('click', () => {
 function renderChat(){
   $('chatHistory').classList.remove('show');
   chatLog.querySelectorAll('.msg').forEach(m => m.remove());
-  for (const m of activeChat().messages) appendMsg(m.role, m.content, false);
+  for (const m of activeChat().messages) appendMsg(m.role, m.content, false, m);
   updateChatEmpty();
   chatLog.scrollTop = chatLog.scrollHeight;
 }
@@ -4087,7 +4087,7 @@ function updateChatEmpty(){
   if (chatEmptyEl()) chatEmptyEl().style.display = has ? 'none' : 'flex';
   $('sidebar').classList.toggle('has-chat', !!has);   // artwork recedes once chatting
 }
-function appendMsg(role, content, scroll = true){
+function appendMsg(role, content, scroll = true, msgObj = null){
   const el = document.createElement('div');
   el.className = 'msg ' + role;
   const bubble = document.createElement('div');
@@ -4095,7 +4095,10 @@ function appendMsg(role, content, scroll = true){
   if (role === 'user') bubble.textContent = content;
   else bubble.innerHTML = mdToHtml(content);
   el.appendChild(bubble);
-  if (role === 'assistant' && content) addMsgActions(el, () => content);
+  if (role === 'assistant' && content){
+    if (msgObj && msgObj.quiz) addQuizRedo(el);   // a quiz message → "Redo Quiz" button
+    else addMsgActions(el, () => content);
+  }
   chatLog.appendChild(el);
   updateChatEmpty();
   if (scroll) chatLog.scrollTop = chatLog.scrollHeight;
@@ -4150,6 +4153,15 @@ function addMsgActions(el, getText){
     toast('Copied', 'ok', 1200);
   });
   row.append(ins, cp);
+  el.appendChild(row);
+}
+function addQuizRedo(el){
+  const row = document.createElement('div');
+  row.className = 'actions';
+  const b = document.createElement('button');
+  b.textContent = 'Redo Quiz';
+  b.addEventListener('click', redoLastQuiz);
+  row.appendChild(b);
   el.appendChild(row);
 }
 
@@ -4578,8 +4590,8 @@ $('btnQuiz').addEventListener('click', () => {
 
 function showQuizSetup(){
   quizBody.innerHTML = `
-    <div class="field"><label>Number of questions</label>
-      <select class="input" id="qzCount"><option>5</option><option>8</option><option>10</option></select></div>
+    <div class="field"><label>Number of questions <span style="font-weight:400;color:var(--text-faint)">(type any amount, 1–50)</span></label>
+      <input class="input" type="number" id="qzCount" min="1" max="50" value="5" style="width:120px"></div>
     <div class="field"><label>Question style</label>
       <select class="input" id="qzStyle">
         <option value="mixed">Mixed — multiple choice + written answers</option>
@@ -4587,9 +4599,9 @@ function showQuizSetup(){
         <option value="short">Written answers only</option>
       </select></div>
     <div class="field"><label>Your instructions <span style="font-weight:400;color:var(--text-faint)">(optional — followed word for word)</span></label>
-      <textarea class="input" id="qzExtra" rows="3" style="height:auto;padding:9px 11px" placeholder="e.g. only about chapter 3 · make them hard · focus on dates · give a hint on each · ask in English"></textarea></div>
+      <textarea class="input" id="qzExtra" rows="3" style="height:auto;padding:9px 11px" placeholder="e.g. give me 25 questions · only about chapter 3 · make them hard · give a hint on each · ask in English"></textarea></div>
     <button class="btn primary" id="qzStart" style="align-self:flex-start">Start quiz</button>`;
-  $('qzStart').onclick = () => startQuiz(+$('qzCount').value, $('qzStyle').value, $('qzExtra').value.trim());
+  $('qzStart').onclick = () => startQuiz(clamp(Math.round(+$('qzCount').value) || 5, 1, 50), $('qzStyle').value, $('qzExtra').value.trim());
 }
 
 function quizPrompt(count, style, extra){
@@ -4630,6 +4642,9 @@ async function startQuiz(count, style, extra){
       (q.type === 'short' || (Array.isArray(q.options) && q.options.length >= 2 && Number.isInteger(q.answer))));
     if (!qs.length) throw new Error('The AI returned no usable questions — try again');
     quiz = { questions: qs, i: 0, score: 0, results: [] };
+    // remember it so it can be re-taken later, and drop a "Redo Quiz" message in the chat
+    doc.lastQuiz = { questions: qs, createdAt: Date.now() };
+    addQuizChatMessage(qs.length);
     showQuestion();
   } catch (err){
     quizBody.innerHTML = `<div class="q-feedback err">⚠ ${escHtml(err.message)}</div>
@@ -4646,6 +4661,23 @@ function srcLine(src){
 function restartQuiz(){
   if (!quiz) return;
   quiz.i = 0; quiz.score = 0; quiz.results = [];
+  showQuestion();
+}
+// drop a persistent "Redo Quiz" message into the AI chat when a quiz is made
+function addQuizChatMessage(n){
+  const msg = { role: 'assistant', quiz: true,
+    content: `Quiz ready — ${n} question${n === 1 ? '' : 's'} from your notes. Take it again anytime with the button below.` };
+  activeChat().messages.push(msg);
+  appendMsg(msg.role, msg.content, true, msg);
+  scheduleDbSave();
+}
+// re-open the last quiz (no AI needed — the questions are already saved with the session)
+function redoLastQuiz(){
+  if (!doc.lastQuiz || !Array.isArray(doc.lastQuiz.questions) || !doc.lastQuiz.questions.length){
+    toast('No quiz to redo yet — make one first', 'err'); return;
+  }
+  quiz = { questions: doc.lastQuiz.questions.slice(), i: 0, score: 0, results: [] };
+  openModal('quizModal');
   showQuestion();
 }
 function showQuestion(){

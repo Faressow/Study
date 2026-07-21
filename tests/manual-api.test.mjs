@@ -163,6 +163,36 @@ try {
   check('quiz: custom instructions marked highest-priority / word-for-word', j12.priority, JSON.stringify(j12));
   check('quiz: no priority block when no instructions given', j12.noneWhenBlank, JSON.stringify(j12));
 
+  // T13: question count is a free number (not a capped 5/8/10 dropdown)
+  const j13 = JSON.parse(await evaluate(`(() => {
+    showQuizSetup();
+    const c = document.getElementById('qzCount');
+    const p25 = quizPrompt(25,'mixed','');
+    return JSON.stringify({ type: c.type, max: c.max, promptHas25: p25.includes('exactly 25 questions'), clampBig: clamp(Math.round(+'999')||5,1,50), clampMid: clamp(Math.round(+'25')||5,1,50) });
+  })()`));
+  check('quiz count is a free number input (min 1, max 50)', j13.type === 'number' && j13.max === '50', JSON.stringify(j13));
+  check('quiz prompt honors an arbitrary count (e.g. 25)', j13.promptHas25, JSON.stringify(j13));
+  check('quiz count clamps to 1..50 (999→50, 25→25)', j13.clampBig === 50 && j13.clampMid === 25, JSON.stringify(j13));
+
+  // T14: "Redo Quiz" does nothing when there is no saved quiz
+  const j14 = JSON.parse(await evaluate(`(() => { delete doc.lastQuiz; quizModal.classList.remove('show'); redoLastQuiz(); return JSON.stringify({ modal: quizModal.classList.contains('show') }); })()`));
+  check('Redo Quiz is a no-op with no saved quiz', j14.modal === false, JSON.stringify(j14));
+
+  // T15: a quiz posts a persistent chat message with a working "Redo Quiz" button
+  const j15 = JSON.parse(await evaluate(`(() => {
+    doc.lastQuiz = { questions:[{type:'short',question:'q1',expected:'a1',source:'s'},{type:'mc',question:'q2',options:['x','y'],answer:0,source:'s'}], createdAt:Date.now() };
+    const before = activeChat().messages.length;
+    addQuizChatMessage(2);
+    const msgs = activeChat().messages, last = msgs[msgs.length-1];
+    const btnTexts = [...document.querySelectorAll('#chatLog .actions button')].map(b => b.textContent);
+    quizModal.classList.remove('show');
+    redoLastQuiz();
+    return JSON.stringify({ pushed: msgs.length === before+1, isQuizMsg: !!last.quiz, hasRedoBtn: btnTexts.includes('Redo Quiz'), modalOpen: quizModal.classList.contains('show'), qCount: quiz && quiz.questions.length, atStart: quiz && quiz.i === 0 });
+  })()`));
+  check('quiz drops a persistent chat message (flagged quiz)', j15.pushed && j15.isQuizMsg, JSON.stringify(j15));
+  check('chat shows a "Redo Quiz" button on that message', j15.hasRedoBtn, JSON.stringify(j15));
+  check('Redo Quiz reopens the saved quiz from the start', j15.modalOpen && j15.qCount === 2 && j15.atStart, JSON.stringify(j15));
+
 } catch (e) {
   check('test harness ran without error', false, e.message);
 } finally {
