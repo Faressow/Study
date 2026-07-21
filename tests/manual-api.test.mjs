@@ -45,12 +45,20 @@ async function evaluate(expression) {
 const results = [];
 function check(name, cond, detail = '') { results.push({ name, pass: !!cond, detail }); }
 
-// Install a fetch spy + reset app AI state. Returns nothing.
+// Install a fetch spy + reset app AI state. Records {url, method}; answers a
+// GET .../models with a fake model list and any chat POST with a canned reply.
 const RESET_AND_SPY = `(() => {
   window.__calls = [];
-  window.fetch = (u, o) => { window.__calls.push(String(u)); return Promise.resolve(new Response(JSON.stringify({choices:[{message:{content:'hi'}}]}), { status:200, headers:{'Content-Type':'application/json'} })); };
-  ['sc-api-key','sc-api-url','sc-model','sc-setup-done'].forEach(k => localStorage.removeItem(k));
+  window.fetch = (u, o) => {
+    const url = String(u), method = (o && o.method) || 'GET';
+    window.__calls.push({ url, method });
+    if (/\\/models$/.test(url)) return Promise.resolve(new Response(JSON.stringify({data:[{id:'model-a'},{id:'model-b'}]}), { status:200, headers:{'Content-Type':'application/json'} }));
+    return Promise.resolve(new Response(JSON.stringify({choices:[{message:{content:'hi'}}]}), { status:200, headers:{'Content-Type':'application/json'} }));
+  };
+  ['sc-api-key','sc-api-url','sc-model','sc-setup-done','sc-models'].forEach(k => localStorage.removeItem(k));
 })()`;
+const chatPosts = calls => calls.filter(c => c.method === 'POST' && !/\/models$/.test(c.url));
+const modelGets = calls => calls.filter(c => /\/models$/.test(c.url));
 
 try {
   // wait for CDP + page
@@ -93,8 +101,9 @@ try {
   await evaluate(`showSetup(); suKey.value='sk-mine'; suUrl.value='https://my.provider.test/v1/chat/completions'; suModel.value='my-model-42'; suSave.click();`);
   for (let i = 0; i < 20 && await evaluate(`localStorage.getItem('sc-setup-done') !== '1'`); i++) await sleep(200);
   const j4 = JSON.parse(await evaluate(`JSON.stringify({ calls: window.__calls.slice(), key: localStorage.getItem('sc-api-key'), url: localStorage.getItem('sc-api-url'), model: localStorage.getItem('sc-model'), setupVisible: setupView.classList.contains('show') })`));
-  check('manual connect makes exactly ONE request (no multi-provider probe)', j4.calls.length === 1, JSON.stringify(j4.calls));
-  check('the one request goes to the typed endpoint', j4.calls[0] === 'https://my.provider.test/v1/chat/completions', JSON.stringify(j4.calls));
+  const j4chat = chatPosts(j4.calls);
+  check('manual connect makes exactly ONE chat request (no multi-provider probe)', j4chat.length === 1, JSON.stringify(j4.calls));
+  check('the chat request goes to the typed endpoint', j4chat[0] && j4chat[0].url === 'https://my.provider.test/v1/chat/completions', JSON.stringify(j4.calls));
   check('key/url/model saved exactly as typed', j4.key === 'sk-mine' && j4.url === 'https://my.provider.test/v1/chat/completions' && j4.model === 'my-model-42', JSON.stringify(j4));
   check('setup dismissed after connect', j4.setupVisible === false, JSON.stringify(j4));
 
@@ -139,6 +148,20 @@ try {
   const j10 = JSON.parse(await evaluate(`JSON.stringify({ key: localStorage.getItem('sc-api-key'), url: localStorage.getItem('sc-api-url'), model: localStorage.getItem('sc-model'), setupDone: localStorage.getItem('sc-setup-done'), setupVisible: setupView.classList.contains('show'), settingsOpen: settingsModal.classList.contains('show') })`));
   check('Remove API clears all four keys', j10.key === null && j10.url === null && j10.model === null && j10.setupDone === null, JSON.stringify(j10));
   check('Remove API reopens the setup screen', j10.setupVisible === true && j10.settingsOpen === false, JSON.stringify(j10));
+
+  // T11: connecting fetches the provider's model list so models "already exist"
+  await evaluate(RESET_AND_SPY);
+  await evaluate(`showSetup(); suKey.value='sk-mods'; suUrl.value='https://models.test/v1/chat/completions'; suModel.value='m'; suSave.click();`);
+  for (let i = 0; i < 20 && await evaluate(`localStorage.getItem('sc-setup-done') !== '1'`); i++) await sleep(200);
+  const j11 = JSON.parse(await evaluate(`JSON.stringify({ calls: window.__calls.slice(), cached: cachedModels('https://models.test/v1/chat/completions'), list: modelsForUrl('https://models.test/v1/chat/completions') })`));
+  check('connect fetches provider models (GET .../models)', modelGets(j11.calls).some(c => c.method === 'GET' && c.url === 'https://models.test/v1/models'), JSON.stringify(j11.calls));
+  check('provider models are cached and appear in the model list', j11.cached.includes('model-a') && j11.list.includes('model-a') && j11.list.includes('model-b'), JSON.stringify(j11));
+
+  // T12: quiz custom instructions are injected verbatim and marked highest-priority
+  const j12 = JSON.parse(await evaluate(`(() => { const p = quizPrompt(5,'mixed','ONLY about chapter 3, in English'); return JSON.stringify({ hasExtra: p.includes('ONLY about chapter 3, in English'), priority: /HIGHEST PRIORITY/.test(p) && /word for word/i.test(p), noneWhenBlank: !quizPrompt(5,'mixed','').includes('HIGHEST PRIORITY') }); })()`));
+  check('quiz: custom instructions injected verbatim', j12.hasExtra, JSON.stringify(j12));
+  check('quiz: custom instructions marked highest-priority / word-for-word', j12.priority, JSON.stringify(j12));
+  check('quiz: no priority block when no instructions given', j12.noneWhenBlank, JSON.stringify(j12));
 
 } catch (e) {
   check('test harness ran without error', false, e.message);

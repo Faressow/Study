@@ -1328,10 +1328,15 @@ input.tile-input{
         <div class="hint">Your provider's chat endpoint — <code>/chat/completions</code> is added automatically if you leave it off.</div>
       </div>
       <div class="field">
-        <div class="lbl-row"><label for="setModelSelect">Model</label><button type="button" class="rm-link" id="rmModel">Remove</button></div>
+        <div class="lbl-row"><label for="setModelSelect">Model</label>
+          <span style="display:flex;gap:8px;align-items:center">
+            <button type="button" class="rm-link" id="loadModels" style="color:var(--accent)">Load models</button>
+            <button type="button" class="rm-link" id="rmModel">Remove</button>
+          </span>
+        </div>
         <select class="input" id="setModelSelect"></select>
         <input class="input" id="setModel" placeholder="type your model name" spellcheck="false" autocomplete="off" style="margin-top:7px;display:none">
-        <div class="hint">Pick “Custom…” to type the exact model name your provider supports.</div>
+        <div class="hint">Your provider's models load in automatically after setup. Hit “Load models” to refresh the list, or pick “Custom…” to type one yourself.</div>
       </div>
       <div class="field">
         <button class="btn ghost" id="rmAll" style="color:#e5484d;border-color:#e5484d55">Remove API (reset)</button>
@@ -3601,8 +3606,40 @@ const AI_ENDPOINTS = [
   { url:'https://api.openai.com/v1/chat/completions',      models:['gpt-4o-mini','gpt-4o','gpt-4.1-mini','o4-mini'] },
   { url:'https://api.mistral.ai/v1/chat/completions',      models:['mistral-small-latest','mistral-large-latest'] }
 ];
-/* the known model list for a saved endpoint — powers the model dropdown */
-function modelsForUrl(url){ const e = AI_ENDPOINTS.find(x => x.url === url); return e ? e.models.slice() : []; }
+/* Models shown in the dropdown for an endpoint = the ones fetched live from the
+   provider (cached) FIRST, then any built-in suggestions for a known endpoint. */
+function modelsForUrl(url){
+  const known = (AI_ENDPOINTS.find(x => x.url === url) || {}).models || [];
+  return [...new Set([...cachedModels(url), ...known])];
+}
+/* the provider's own model list — GET {endpoint}/models (OpenAI-compatible),
+   cached per-URL so the models "already exist" in the dropdown after setup. */
+function modelsEndpoint(chatUrl){
+  return /\/chat\/completions$/i.test(chatUrl)
+    ? chatUrl.replace(/\/chat\/completions$/i, '/models')
+    : chatUrl.replace(/\/+$/, '') + '/models';
+}
+function cachedModels(url){
+  try { const c = JSON.parse(localStorage.getItem('sc-models') || '{}'); return (c.url === url && Array.isArray(c.models)) ? c.models : []; }
+  catch { return []; }
+}
+async function fetchProviderModels(key, chatUrl){
+  const res = await fetch(modelsEndpoint(chatUrl), { headers: { 'Authorization': 'Bearer ' + key } });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const j = await res.json();
+  const arr = Array.isArray(j.data) ? j.data : Array.isArray(j.models) ? j.models : Array.isArray(j) ? j : [];
+  const ids = arr.map(m => typeof m === 'string' ? m : (m && (m.id || m.name))).filter(Boolean);
+  return [...new Set(ids)].sort();
+}
+/* best-effort: fetch + cache the provider's models for this endpoint (never throws) */
+async function loadAndCacheModels(key, chatUrl){
+  if (!key || !chatUrl) return [];
+  try {
+    const models = await fetchProviderModels(key, chatUrl);
+    if (models.length) localStorage.setItem('sc-models', JSON.stringify({ url: chatUrl, models }));
+    return models;
+  } catch { return []; }
+}
 async function testAiConnection(key, url, model){
   if (!key)   return { ok:false, msg:'✗ Enter an API key first' };
   if (!url)   return { ok:false, msg:'✗ Enter the endpoint URL first' };
@@ -3655,6 +3692,10 @@ function openSettings(){
   $('setLang').value   = transLang();
   $('testResult').className = ''; $('testResult').style.display = 'none';
   openModal('settingsModal');
+  // if we have a key+endpoint but no cached model list yet, fetch it quietly
+  if (apiKey() && apiUrl() && cachedModels(apiUrl()).length === 0){
+    loadAndCacheModels(apiKey(), apiUrl()).then(m => { if (m.length) fillModelSelect(); });
+  }
 }
 $('btnSaveSettings').addEventListener('click', async () => {
   // Fully manual — save exactly what you typed (no auto-detection).
@@ -3673,6 +3714,16 @@ $('btnTestKey').addEventListener('click', async () => {
   const t = await testAiConnection($('setApiKey').value.trim(), normalizeApiUrl($('setApiUrl').value), chosenModel());
   res.className = t.ok ? 'ok' : 'err'; res.textContent = t.msg;
 });
+$('loadModels').addEventListener('click', async () => {
+  const key = $('setApiKey').value.trim(), url = normalizeApiUrl($('setApiUrl').value);
+  const res = $('testResult'); res.style.display = 'inline'; res.className = '';
+  if (!key || !url){ res.className = 'err'; res.textContent = '✗ Enter your key and endpoint URL first'; return; }
+  const btn = $('loadModels'); btn.disabled = true; res.textContent = 'Loading models…';
+  const models = await loadAndCacheModels(key, url);
+  btn.disabled = false;
+  if (models.length){ fillModelSelect(); res.className = 'ok'; res.textContent = `✓ Loaded ${models.length} models`; }
+  else { res.className = 'err'; res.textContent = "✗ Couldn't load models — check the key/URL, or type the model under Custom…"; }
+});
 
 /* ---- Remove controls: each field on its own, plus a full reset ---- */
 $('rmKey').addEventListener('click', () => {
@@ -3680,7 +3731,7 @@ $('rmKey').addEventListener('click', () => {
   $('testResult').style.display = 'none'; toast('API key removed', 'ok', 1400);
 });
 $('rmUrl').addEventListener('click', () => {
-  localStorage.removeItem('sc-api-url'); $('setApiUrl').value = '';
+  localStorage.removeItem('sc-api-url'); localStorage.removeItem('sc-models'); $('setApiUrl').value = '';
   fillModelSelect();   // model suggestions follow the (now empty) endpoint
   $('testResult').style.display = 'none'; toast('Endpoint URL removed', 'ok', 1400);
 });
@@ -3690,7 +3741,7 @@ $('rmModel').addEventListener('click', () => {
 });
 $('rmAll').addEventListener('click', () => {
   // remove the whole AI config together — brings back the one-time setup screen.
-  ['sc-api-key','sc-api-url','sc-model','sc-setup-done'].forEach(k => localStorage.removeItem(k));
+  ['sc-api-key','sc-api-url','sc-model','sc-setup-done','sc-models'].forEach(k => localStorage.removeItem(k));
   $('setApiKey').value = ''; $('setApiUrl').value = ''; $('setModel').value = ''; fillModelSelect();
   closeModal('settingsModal');
   showSetup();
@@ -3730,6 +3781,8 @@ $('suSave').addEventListener('click', async () => {
   localStorage.setItem('sc-model', model);
   const btn = $('suSave'); btn.disabled = true; r.className = ''; r.textContent = 'Testing…';
   const t = await testAiConnection(key, url, model);
+  // pull the provider's model list now so the models "already exist" in Settings later
+  await loadAndCacheModels(key, url);
   btn.disabled = false;
   // engaged once → never auto-show this screen again (AI is gated on-demand by requireKey)
   localStorage.setItem('sc-setup-done', '1');
@@ -4533,14 +4586,24 @@ function showQuizSetup(){
         <option value="mc">Multiple choice only</option>
         <option value="short">Written answers only</option>
       </select></div>
+    <div class="field"><label>Your instructions <span style="font-weight:400;color:var(--text-faint)">(optional — followed word for word)</span></label>
+      <textarea class="input" id="qzExtra" rows="3" style="height:auto;padding:9px 11px" placeholder="e.g. only about chapter 3 · make them hard · focus on dates · give a hint on each · ask in English"></textarea></div>
     <button class="btn primary" id="qzStart" style="align-self:flex-start">Start quiz</button>`;
-  $('qzStart').onclick = () => startQuiz(+$('qzCount').value, $('qzStyle').value);
+  $('qzStart').onclick = () => startQuiz(+$('qzCount').value, $('qzStyle').value, $('qzExtra').value.trim());
 }
 
-function quizPrompt(count, style){
+function quizPrompt(count, style, extra){
   const styleTxt = style === 'mc' ? 'All questions must be multiple choice.'
     : style === 'short' ? 'All questions must be short written-answer questions.'
     : 'Mix multiple-choice and short written-answer questions (about 70% multiple choice).';
+  // The user's own instructions come LAST and win — they must be obeyed literally.
+  const extraTxt = extra ? `
+
+THE STUDENT'S OWN INSTRUCTIONS (HIGHEST PRIORITY — follow them EXACTLY, word for word, even where they change or override anything above, including the number of questions or the style):
+"""
+${extra}
+"""
+` : '';
   return `Create a quiz with exactly ${count} questions based ONLY on these study notes:
 """
 ${noteContext()}
@@ -4552,15 +4615,15 @@ Reply with ONLY this JSON shape:
  {"type":"short","question":"…","expected":"the full correct answer","source":"a real, verifiable reference"}
 ]}
 "answer" is the 0-based index of the correct option. "expected" must be the actual correct answer, never empty.
-For every question, "source" must be a REAL, trustworthy reference where the fact can be checked — e.g. a well-known book (with author), an encyclopedia, or a reputable academic/educational source. Never invent a fake source; if unsure, cite a widely-accepted general reference. Write the quiz in the same language as the notes.`;
+For every question, "source" must be a REAL, trustworthy reference where the fact can be checked — e.g. a well-known book (with author), an encyclopedia, or a reputable academic/educational source. Never invent a fake source; if unsure, cite a widely-accepted general reference. Write the quiz in the same language as the notes.${extraTxt}`;
 }
 
-async function startQuiz(count, style){
+async function startQuiz(count, style, extra){
   quizBody.innerHTML = `<div class="quiz-loading"><div class="spinner"></div>Writing ${count} questions from your notes…</div>`;
   try {
     const data = await aiJSON([
-      { role: 'system', content: 'You create study quizzes. Reply ONLY with valid JSON.' },
-      { role: 'user', content: quizPrompt(count, style) }
+      { role: 'system', content: 'You create study quizzes. Reply ONLY with valid JSON. When the student gives their own instructions, follow them exactly, word for word — they take priority over the default settings.' },
+      { role: 'user', content: quizPrompt(count, style, extra) }
     ]);
     let qs = Array.isArray(data.questions) ? data.questions : [];
     qs = qs.filter(q => q && q.question &&
