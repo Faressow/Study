@@ -4657,10 +4657,32 @@ async function startQuiz(count, style, extra){
 function srcLine(src){
   return src ? `<div class="q-src">Source: ${escHtml(String(src))}</div>` : '';
 }
-// replay the SAME questions from the start
+// Fisher–Yates shuffle → a NEW array in random order
+function shuffled(arr){
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+// shuffle a question's multiple-choice options too, keeping "answer" pointing at
+// the correct option (so the right answer isn't always in the same position)
+function shuffleQuestion(q){
+  if (q.type === 'mc' && Array.isArray(q.options) && Number.isInteger(q.answer)){
+    const order = shuffled(q.options.map((_, i) => i));
+    return { ...q, options: order.map(i => q.options[i]), answer: order.indexOf(q.answer) };
+  }
+  return { ...q };
+}
+// build a freshly randomized run of the given questions (order + MC options)
+function randomizedRun(questions){
+  return { questions: shuffled(questions).map(shuffleQuestion), i: 0, score: 0, results: [] };
+}
+// replay the questions from the start, in a NEW random order each time
 function restartQuiz(){
   if (!quiz) return;
-  quiz.i = 0; quiz.score = 0; quiz.results = [];
+  quiz = randomizedRun(quiz.questions);
   showQuestion();
 }
 // drop a persistent "Redo Quiz" message into the AI chat when a quiz is made
@@ -4676,7 +4698,7 @@ function redoLastQuiz(){
   if (!doc.lastQuiz || !Array.isArray(doc.lastQuiz.questions) || !doc.lastQuiz.questions.length){
     toast('No quiz to redo yet — make one first', 'err'); return;
   }
-  quiz = { questions: doc.lastQuiz.questions.slice(), i: 0, score: 0, results: [] };
+  quiz = randomizedRun(doc.lastQuiz.questions);   // new random order every redo
   openModal('quizModal');
   showQuestion();
 }

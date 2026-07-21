@@ -193,6 +193,40 @@ try {
   check('chat shows a "Redo Quiz" button on that message', j15.hasRedoBtn, JSON.stringify(j15));
   check('Redo Quiz reopens the saved quiz from the start', j15.modalOpen && j15.qCount === 2 && j15.atStart, JSON.stringify(j15));
 
+  // T16: randomizer — redo reorders questions and shuffles MC options, keeping answers correct
+  const j16 = JSON.parse(await evaluate(`(() => {
+    const src = Array.from({length:100}, (_,i)=>i);
+    const sh = shuffled(src);
+    const isPerm = sh.length===100 && sh.slice().sort((a,b)=>a-b).join()===src.join();
+    const orderChanged = sh.join() !== src.join();
+    // MC option shuffle keeps the correct option text (try many times)
+    let shuffleQOk = true;
+    const q = { type:'mc', question:'Q', options:['A','B','C','D'], answer:2 };
+    for (let t=0;t<25;t++){ const s=shuffleQuestion(q); if (s.options[s.answer]!=='C' || s.options.slice().sort().join()!=='A,B,C,D'){ shuffleQOk=false; break; } }
+    // redo keeps the same question SET and MC integrity
+    doc.lastQuiz = { questions:[
+      {type:'short',question:'S1',expected:'a'},{type:'short',question:'S2',expected:'b'},
+      {type:'mc',question:'M1',options:['w','x','y','z'],answer:1},
+      {type:'short',question:'S3',expected:'c'},{type:'short',question:'S4',expected:'d'},{type:'short',question:'S5',expected:'e'}
+    ]};
+    quizModal.classList.remove('show'); redoLastQuiz();
+    const set = quiz.questions.map(x=>x.question).sort().join(',');
+    const mc = quiz.questions.find(x=>x.type==='mc');
+    const mcOk = !!mc && mc.options[mc.answer]==='x' && mc.options.slice().sort().join()==='w,x,y,z';
+    // redo a few times: the original stays intact and at least one order differs
+    const orig = doc.lastQuiz.questions.map(x=>x.question).join(',');
+    let anyDifferent = false;
+    for (let t=0;t<6;t++){ redoLastQuiz(); if (quiz.questions.map(x=>x.question).join(',') !== orig) anyDifferent = true; }
+    const originalIntact = doc.lastQuiz.questions.map(x=>x.question).join(',') === 'S1,S2,M1,S3,S4,S5';
+    return JSON.stringify({ isPerm, orderChanged, shuffleQOk, sameSet: set==='M1,S1,S2,S3,S4,S5' && quiz.questions.length===6, mcOk, anyDifferent, originalIntact });
+  })()`));
+  check('randomizer: shuffle is a permutation (no lost/dup items)', j16.isPerm, JSON.stringify(j16));
+  check('randomizer: shuffle actually changes the order', j16.orderChanged, JSON.stringify(j16));
+  check('randomizer: MC options shuffle keeps the correct answer', j16.shuffleQOk && j16.mcOk, JSON.stringify(j16));
+  check('redo keeps the same question set', j16.sameSet, JSON.stringify(j16));
+  check('redo reorders questions (order differs across redos)', j16.anyDifferent, JSON.stringify(j16));
+  check('redo does not mutate the saved original order', j16.originalIntact, JSON.stringify(j16));
+
 } catch (e) {
   check('test harness ran without error', false, e.message);
 } finally {
